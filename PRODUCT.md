@@ -27,9 +27,11 @@ Visitors are **engineering team leads and CTOs**. They don't want a 400-row scan
 
 | Option | Direction | Status |
 | --- | --- | --- |
-| A · Signal | Dark operator console. A live scan session (recon → hunt → validate → brief) shows candidates being disproven; verified findings come with a source trace. | candidate |
-| B · Ledger | Light, consultancy-style. A confidential CTO briefing with a risk register stamped verified / needs input / rejected, effort per fix, and a recommendation. | candidate |
-| C · Redline | Offensive-security dossier: attack path, PoC evidence, fix order for CTOs and team leads. Replaced the earlier "Aurora" option, which was rejected as too consumer-friendly. | candidate |
+| A · Console | Terminal. The whole page is a full-screen amber-phosphor TUI: block-letter wordmark, box-drawn panes (brief, findings list with verdicts, pipeline progress), function-key bar. | candidate |
+| B · Essay | Text-centric. A short argument addressed to engineering leaders, set as a long read: one column, margin notes, highlighter marks, a sample brief typeset inline. | candidate |
+| C · Guilloche | Artistic. Banknote security printing (the craft built to stop forgery): malachite field, guilloche rosettes and an engraved eye of Argus Panoptes computed in SVG, microtext borders, serial numbers. | candidate |
+
+Earlier rounds (Signal, Ledger, Redline, and before that Aurora) were replaced at the owner's request.
 
 Approval is stored in D1 (`app_settings.landing_design`). Until something is approved, `/` shows option A with a banner pointing to `/design`. Set `ADMIN_GITHUB_LOGINS` to restrict who can approve. Screenshots are in [`docs/design/`](./docs/design).
 

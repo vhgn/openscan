@@ -21,7 +21,7 @@ function DesignPicker() {
   const [error, setError] = useState<string | null>(null)
   const keys = Object.keys(LANDING_DESIGNS) as DesignKey[]
 
-  // Full-page preview of a single option (?preview=ledger)
+  // Full-page preview of a single option (?preview=essay)
   if (preview) {
     const D = LANDING_DESIGNS[preview]
     return (

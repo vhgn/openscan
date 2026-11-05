@@ -79,7 +79,7 @@ export const getMe = createServerFn({ method: 'GET' }).handler(async () => {
 
 // ------------------------------------------------------------------ landing design
 
-export const DESIGNS = ['signal', 'ledger', 'redline'] as const
+export const DESIGNS = ['console', 'essay', 'guilloche'] as const
 export type DesignId = (typeof DESIGNS)[number]
 
 export const getDesign = createServerFn({ method: 'GET' }).handler(async () => {
@@ -87,7 +87,8 @@ export const getDesign = createServerFn({ method: 'GET' }).handler(async () => {
   const user = await currentUser()
   const admins = str('ADMIN_GITHUB_LOGINS').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
   return {
-    approved: (row?.value as DesignId | undefined) ?? null,
+    // An approval of a design that no longer exists counts as no approval.
+    approved: row && (DESIGNS as readonly string[]).includes(row.value) ? (row.value as DesignId) : null,
     approvedBy: row?.updated_by ?? null,
     approvedAt: row?.updated_at ?? null,
     canApprove: Boolean(user) && (admins.length === 0 || admins.includes(user!.login.toLowerCase())),
