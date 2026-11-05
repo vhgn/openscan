@@ -401,6 +401,38 @@ describe('Codex engine: fallbacks to direct ChatGPT', () => {
   })
 })
 
+// ---------------------------------------------------------------- crash after a task is created
+
+describe('Codex engine: a step that dies after creating its task', () => {
+  test('the retry polls the task it already created instead of starting a second one', async () => {
+    const { user, repo } = setup()
+    t.db.write(`UPDATE repositories SET profile_json = ?, understood_at = ? WHERE id = 77`, JSON.stringify(RECON), Date.now())
+    codex.script('hunt', running, done(HUNT)).script('validate', done(VALIDATE))
+    const id = await createScan(user, repo, 'security', 'manual')
+    await runUntil(id, 'codex_hunt')
+
+    // The step's final write fails once (as if D1 or the worker died right after Codex accepted the task).
+    const prepare = t.db.prepare.bind(t.db)
+    let failed = false
+    t.db.prepare = (sql: string) => {
+      if (!failed && /attempts = 0/.test(sql)) {
+        failed = true
+        throw new Error('D1_ERROR: storage reset')
+      }
+      return prepare(sql)
+    }
+    t.queue.splice(t.queue.findIndex((j) => j.scanId === id), 1)
+    await runStep(id)
+    t.db.prepare = prepare
+    assert.ok(failed)
+    assert.deepEqual([scanRow(t, id).phase, scanRow(t, id).attempts], ['codex_hunt_wait', 1], 'the task was saved before the failure')
+
+    await run()
+    assert.equal(codex.tasks.filter((x) => x.role === 'hunt').length, 1, 'one hunt task on the user\'s plan')
+    assert.deepEqual([scanRow(t, id).status, scanRow(t, id).engine], ['completed', 'codex'])
+  })
+})
+
 // ---------------------------------------------------------------- cron + Codex wait
 
 describe('Codex engine: the cron and a scan waiting on Codex', () => {

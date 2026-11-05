@@ -332,6 +332,7 @@ async function runLoadedStep(scan: ScanRow, leaseId: string): Promise<number | n
 
   const ctx: StepCtx = {
     scan,
+    leaseId,
     user,
     repo,
     state: parseJson<ScanState>(scan.state_json, {}),
@@ -393,6 +394,8 @@ async function lostLease(scan: ScanRow): Promise<null> {
 
 interface StepCtx {
   scan: ScanRow
+  /** The step lease this worker holds; writes made before the step ends are fenced on it. */
+  leaseId: string
   user: UserRow
   repo: RepoRow
   state: ScanState
@@ -1146,6 +1149,18 @@ async function runCodexTask<R extends CP.CodexRole>(
       }
       if (issued) await attachTask(issued.hash, id)
       state.codex.tasks[role] = { id, startedAt: now(), tokenHash: issued?.hash, ghTokenEnc: gh ? await encrypt(gh.token) : undefined }
+      // Save the task and the wait phase now, not when the step ends: if the worker dies (or the
+      // step's final write fails) after this point, the retry polls this task instead of starting another.
+      await exec(
+        `UPDATE scans SET phase = ?, progress = ?, state_json = ?, skills_json = ?, updated_at = ? WHERE id = ? AND lease_id = ?`,
+        waitPhase,
+        progress,
+        JSON.stringify(state),
+        JSON.stringify(state.skills ?? []),
+        now(),
+        scan.id,
+        ctx.leaseId,
+      )
       await recordCodexTasks(ctx, { [role]: 'running' } as Partial<Record<CP.CodexRole, string>>)
       await logEvent(
         scan.id,
