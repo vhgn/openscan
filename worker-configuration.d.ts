@@ -7,7 +7,6 @@ interface __BaseEnv_Env {
 	APP_URL: "http://localhost:3000";
 	GITHUB_APP_SLUG: "ox-scanner";
 	AI_MODE: "auto";
-	ADMIN_GITHUB_LOGINS: "";
 	SESSION_SECRET: string;
 	LWC_SECRET: string;
 	DEV_DEMO_LOGIN: string;
@@ -23,7 +22,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "APP_URL" | "GITHUB_APP_SLUG" | "AI_MODE" | "ADMIN_GITHUB_LOGINS" | "SESSION_SECRET" | "LWC_SECRET" | "DEV_DEMO_LOGIN">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "APP_URL" | "GITHUB_APP_SLUG" | "AI_MODE" | "SESSION_SECRET" | "LWC_SECRET" | "DEV_DEMO_LOGIN">> {}
 }
 declare module "*.txt" {
 	const value: string;

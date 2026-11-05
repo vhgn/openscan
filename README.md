@@ -12,11 +12,11 @@ Built with **TanStack Start** on **Cloudflare Workers**, **D1** (SQLite), and **
 | --- | --- | --- |
 | **[README.md](./README.md)** (this file) | How to run locally, deploy, architecture, technical decisions, how coding agents were used | You want to run or change the code |
 | **[TASK.md](./TASK.md)** | The original assignment brief (transcribed from `Agentic_poc.pdf`) plus a table mapping each requirement to where it lives | You want to know what was asked |
-| **[PRODUCT.md](./PRODUCT.md)** | Product spec: audience, required flows, landing page options, preferences, questions model, out of scope | You want to know what we're building and why |
+| **[PRODUCT.md](./PRODUCT.md)** | Product spec: audience, required flows, the chosen design (Essay), preferences, questions model, out of scope | You want to know what we're building and why |
 | **[SKILLS.md](./SKILLS.md)** | The agentic security skills the scanner uses (Trail of Bits, Cloudflare, Anthropic, NVIDIA, Cognition, OpenAI): which stage each runs in, how it's applied, licenses, and how to update them | You want to know *how* a scan reasons, or to change the methodology |
 | [`skills/vendor/`](./skills/vendor) | Verbatim copies of those skills, with upstream licenses and pinned commits (`SOURCES.md`) | Auditing or updating the methodology |
-| [`docs/design/`](./docs/design) | Screenshots of the 3 landing page options on `/design` | Picking a landing page |
-| [`docs/screens/`](./docs/screens) | Screenshots of the onboarding → dashboard → report flow | Quick visual tour |
+| [`docs/design/`](./docs/design) | The chosen Essay style: landing page and sample brief (also live on `/design`) | Seeing the design |
+| [`docs/screens/`](./docs/screens) | Screenshots of landing → onboarding → brief → report → settings → product memory | Quick visual tour |
 | [`.dev.vars.example`](./.dev.vars.example) | Every secret and env var, with comments | Setting up your environment |
 
 ---
@@ -52,7 +52,7 @@ npm run dev
 
 Then open:
 
-1. **http://localhost:3000/design**: pick a landing page (sign in first to approve).
+1. **http://localhost:3000/**: the landing page (Essay style; `/design` shows the style and a sample brief).
 2. **http://localhost:3000/api/dev/login?repos=OWASP/NodeGoat**: demo sign-in with any public repos (comma-separated). It drops you into onboarding.
 3. Select the repo, then either **Login with ChatGPT** (real AI) or **Skip** (deterministic heuristic engine), answer the preference questions, wait for reading, and land on the dashboard.
 
@@ -140,7 +140,7 @@ Set each secret (you'll be prompted for the value):
 for s in SESSION_SECRET LWC_SECRET GITHUB_APP_ID GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET GITHUB_WEBHOOK_SECRET GITHUB_APP_PRIVATE_KEY; do npx wrangler secret put $s; done
 ```
 
-Set `APP_URL` and `GITHUB_APP_SLUG` in `wrangler.jsonc` `vars` (optionally `ADMIN_GITHUB_LOGINS` so only you can approve a design), then:
+Set `APP_URL` and `GITHUB_APP_SLUG` in `wrangler.jsonc` `vars`, then:
 
 ```bash
 npm run deploy
@@ -154,7 +154,7 @@ Finally, point the GitHub App's URLs at the deployed `APP_URL`. Queues and cron 
 
 ```
                       ┌──────────────────────── Cloudflare Worker (src/server.ts) ───────────────────────┐
- browser ── HTTPS ──▶ │ fetch: TanStack Start (SSR pages, server fns, /api/*)                             │
+ browser ── HTTPS ──▶ │ fetch: TanStack Start (SSR landing, client pages, server fns, /api/*)            │
                       │   /api/auth/github/*   GitHub App user OAuth  ──▶ D1 users/sessions              │
                       │   /api/github/webhook  installation / repos / push ──▶ D1, enqueue scans         │
                       │   /api/chatgpt/*       login-with-chatgpt handler (D1-backed session store)      │
@@ -205,7 +205,7 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 
 ### Data model (`migrations/0001_init.sql`)
 
-`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` · `memory` · `preferences` · `scans` (status/phase/progress/state/summary/skills/Codex tasks/product/run) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (approved landing design).
+`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` · `memory` · `preferences` · `scans` (status/phase/progress/state/summary/skills/Codex tasks/product/run) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
 
 ### REST API (cookie-authenticated)
 
@@ -221,7 +221,9 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 
 ## Technical decisions
 
-- **TanStack Start on Workers.** One deployable gives SSR pages, typed server functions for the UI, and plain API routes for REST and webhooks. The same Worker exports `queue` and `scheduled` handlers (`src/server.ts`), so there's no separate backend to run.
+- **TanStack Start on Workers.** One deployable gives pages, typed server functions for the UI, and plain API routes for REST and webhooks. The same Worker exports `queue` and `scheduled` handlers (`src/server.ts`), so there's no separate backend to run.
+- **Selective SSR: only the landing page renders on the server.** `src/start.ts` sets `defaultSsr: false`; the root and `/` opt back in with `ssr: true`. The public page arrives as full HTML (fast first paint, crawlable), while signed-in pages render in the browser and load their data through server functions. That keeps the Worker's SSR work to one page, avoids hydration mismatches on live data (relative times, progress), and shows a quiet wordmark while a page loads.
+- **One design system (Essay).** Tokens in `src/styles.css` (paper, ink, cream squiggle; Newsreader, Instrument Serif, Inter, JetBrains Mono) and primitives in `src/components/ui.tsx` (`Page`, `Masthead`, `Margin`, `SectionHead`, `Severity`, `Verdict`, `Progress`). Every page is a document: one 42rem reading column, notes in the right margin, severity as words rather than coloured pills.
 - **D1 + Queues instead of a long-running job.** Workers are request-scoped, so a repo review is split into small idempotent steps. Steps are retried with backoff, and a cron revives anything stalled for more than 10 minutes.
 - **The GitHub App reads code with installation tokens; user tokens are used only to discover repos.** Background scans never depend on a user being online. User tokens are AES-GCM encrypted at rest and refreshed automatically.
 - **ChatGPT tokens stay server-side.** For background scans we store the user's *signed SDK session cookie* (encrypted) and replay it through `auth.proxyFetch()`, which calls the SDK handler in-process. The SDK's own session store is a D1 table, so sessions survive deploys. Codex Cloud task calls aren't behind the SDK proxy, so for those only, the Worker uses `dangerouslyGetTokens()` to get a fresh **short-lived access token + account id**. The refresh token stays redacted inside the SDK, and access tokens are never stored or logged.
@@ -248,6 +250,6 @@ This POC was built with **Claude Code** as a pair programmer, in a single sessio
 
 1. **Brief → spec.** The agent read the assignment PDF and the product owner's notes and turned them into `TASK.md` and `PRODUCT.md`.
 2. **Research before code.** It cloned `opencoredev/login-with-chatgpt` and read its docs, skill file and source (`proxyFetch`, session store, request normalization). That's how it arrived at the "replay the signed cookie through `proxyFetch`" approach for background inference without exporting tokens. It scaffolded TanStack Start with `create-cloudflare` to get the canonical Workers setup.
-3. **Design loop with the owner.** It built the three `/design` options and screenshotted them with Playwright. After feedback it replaced option C with a more offensive-security style for CTOs and team leads, and renamed the product to *openscan*.
+3. **Design loop with the owner.** It built `/design` options in several rounds (terminal, editorial, banknote-engraving and others), screenshotted them with Playwright and published them for comments. The owner chose **Essay**, and the agent then rebuilt every signed-in page in that system.
 4. **Verification.** `tsc`, unit tests (which caught a real ranking bug: test files outranked application code), a production build plus `wrangler deploy --dry-run`, and a Playwright-driven end-to-end run of onboarding → reading → report (screenshots in `docs/screens/`). Runtime issues found this way and fixed: a duplicate React instance during SSR dep optimization, a hydration mismatch, and GitHub anonymous rate limits.
 5. **Human in the loop.** The product owner made the product decisions (flow, audience, naming, design choice). Anything needing real credentials (GitHub App, ChatGPT) is documented above rather than faked.

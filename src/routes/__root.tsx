@@ -2,6 +2,9 @@ import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
 import appCss from '../styles.css?url'
 
 export const Route = createRootRoute({
+  // The root opts in so `/` can render on the server; every other route inherits
+  // `defaultSsr: false` from src/start.ts (a child can't be more SSR than its parent).
+  ssr: true,
   head: () => ({
     meta: [
       { charSet: 'utf-8' },
@@ -13,7 +16,7 @@ export const Route = createRootRoute({
       { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
       {
         rel: 'stylesheet',
-        href: 'https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,500;1,500&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap',
+        href: 'https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap',
       },
       { rel: 'stylesheet', href: appCss },
     ],
@@ -27,7 +30,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <head>
         <HeadContent />
       </head>
-      <body className="font-sans antialiased min-h-screen">
+      <body className="min-h-screen bg-paper font-serif text-ink antialiased">
         {children}
         <Scripts />
       </body>

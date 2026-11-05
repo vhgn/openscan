@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as DesignRouteImport } from './routes/design'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SkillsRouteImport } from './routes/skills'
 import { Route as ProductsProductIdRouteImport } from './routes/products.$productId'
 import { Route as ScansScanIdRouteImport } from './routes/scans.$scanId'
@@ -44,6 +45,11 @@ const DesignRoute = DesignRouteImport.update({
 const OnboardingRoute = OnboardingRouteImport.update({
   id: '/onboarding',
   path: '/onboarding',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SkillsRoute = SkillsRouteImport.update({
@@ -112,6 +118,7 @@ export interface FileRoutesByFullPath {
   '/dashboard': typeof DashboardRoute
   '/design': typeof DesignRoute
   '/onboarding': typeof OnboardingRoute
+  '/settings': typeof SettingsRoute
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
@@ -130,6 +137,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof DashboardRoute
   '/design': typeof DesignRoute
   '/onboarding': typeof OnboardingRoute
+  '/settings': typeof SettingsRoute
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
@@ -149,6 +157,7 @@ export interface FileRoutesById {
   '/dashboard': typeof DashboardRoute
   '/design': typeof DesignRoute
   '/onboarding': typeof OnboardingRoute
+  '/settings': typeof SettingsRoute
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
@@ -169,6 +178,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/design'
     | '/onboarding'
+    | '/settings'
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
@@ -187,6 +197,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/design'
     | '/onboarding'
+    | '/settings'
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
@@ -205,6 +216,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/design'
     | '/onboarding'
+    | '/settings'
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
@@ -224,6 +236,7 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   DesignRoute: typeof DesignRoute
   OnboardingRoute: typeof OnboardingRoute
+  SettingsRoute: typeof SettingsRoute
   SkillsRoute: typeof SkillsRoute
   ProductsProductIdRoute: typeof ProductsProductIdRoute
   ScansScanIdRoute: typeof ScansScanIdRoute
@@ -266,6 +279,13 @@ declare module '@tanstack/react-router' {
       path: '/onboarding'
       fullPath: '/onboarding'
       preLoaderRoute: typeof OnboardingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/skills': {
@@ -360,6 +380,7 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   DesignRoute: DesignRoute,
   OnboardingRoute: OnboardingRoute,
+  SettingsRoute: SettingsRoute,
   SkillsRoute: SkillsRoute,
   ProductsProductIdRoute: ProductsProductIdRoute,
   ScansScanIdRoute: ScansScanIdRoute,
@@ -378,10 +399,11 @@ export const routeTree = rootRouteImport
   ._addFileTypes<FileRouteTypes>()
 
 import type { getRouter } from './router.tsx'
-import type { createStart } from '@tanstack/react-start'
+import type { startInstance } from './start.ts'
 declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
   }
 }

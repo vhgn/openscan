@@ -17,7 +17,7 @@ function Margin({ children }: { children: React.ReactNode }) {
   return <aside className={`${sans} mt-2 text-[12.5px] leading-snug text-[#6f6f6a] lg:absolute lg:left-[calc(100%+2.5rem)] lg:top-1 lg:mt-0 lg:w-52`}>{children}</aside>
 }
 
-/** Option B report page: the weekly brief typeset as a document. */
+/** Static sample of the brief (for /design and the landing page's sample link). */
 export function ReportEssay({ data }: { data: ReportData }) {
   const s = data.scan
   return (

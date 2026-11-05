@@ -1,7 +1,7 @@
 /**
- * Sample signed-in report used by the report page design options. Shaped like the
- * app's real scan detail (src/lib/queries.ts → scanDetail) so a chosen style can be
- * bound to live data without reshaping.
+ * Sample signed-in brief shown on /design and linked from the landing page
+ * ("See a sample brief"). Loosely shaped like the real scan detail
+ * (src/lib/queries.ts → scanDetail); the live page is src/routes/scans.$scanId.tsx.
  */
 export type Verdict = 'confirmed' | 'needs_validation' | 'rejected' | null
 

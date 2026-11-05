@@ -13,47 +13,57 @@ export interface QuestionLike {
   evidence: string | null
 }
 
+/**
+ * A question from the AI, set as a line of the brief with a ruled answer line.
+ * Answered questions show the answer in italics and who gave it.
+ */
 export function QuestionCard({ q, compact = false }: { q: QuestionLike; compact?: boolean }) {
   const router = useRouter()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const size = compact ? 'text-[16px]' : 'text-[19px]'
+
   if (q.status !== 'open') {
     return (
-      <div className={`rounded-lg border hairline ${compact ? 'p-2.5' : 'p-3'} text-sm`}>
-        <p className="muted line-through decoration-1">{q.question}</p>
-        <p className="mt-1">
-          <span className={`mr-1 rounded px-1 text-[10px] font-bold uppercase ${q.answer_source === 'ai' ? 'bg-emerald-600 text-white' : 'bg-[var(--fg)] text-[var(--bg)]'}`}>
-            {q.answer_source === 'ai' ? 'AI answered' : 'You'}
+      <div>
+        <p className={`${size} leading-[1.5] text-ink-3`}>{q.question}</p>
+        <p className={`mt-1 ${compact ? 'text-[15px]' : 'text-[17px]'} italic text-ink-2`}>
+          {q.status === 'dismissed' ? 'Skipped.' : q.answer}{' '}
+          <span className="font-sans text-[12px] not-italic text-muted">
+            ({q.answer_source === 'ai' ? 'answered by the AI from the code' : q.status === 'dismissed' ? 'by you' : 'your answer'})
           </span>
-          {q.answer}
         </p>
-        {q.evidence && !compact && <p className="muted mt-1 font-mono text-xs">{q.evidence}</p>}
+        {q.evidence && !compact && <p className="mt-1 font-mono text-[12px] text-muted">{q.evidence}</p>}
       </div>
     )
   }
+
   return (
-    <div className={`rounded-lg border border-amber-500/40 bg-amber-500/5 ${compact ? 'p-2.5' : 'p-3'} text-sm`}>
-      {q.repo && !compact && <p className="muted text-xs">{q.repo}</p>}
-      <p className="font-medium">{q.question}</p>
-      {q.rationale && <p className="muted mt-0.5 text-xs">{q.rationale}</p>}
+    <div>
+      {q.repo && !compact && <p className="font-sans text-[12px] text-muted">{q.repo}</p>}
+      <p className={`${size} leading-[1.5]`}>{q.question}</p>
+      {q.rationale && <p className="mt-1 font-sans text-[13px] leading-snug text-muted">{q.rationale}</p>}
       <form
-        className="mt-2 flex gap-2"
+        className="mt-3 flex flex-wrap items-end gap-x-3 gap-y-2"
         onSubmit={async (e) => {
           e.preventDefault()
           if (!text.trim()) return
           setBusy(true)
-          await answerQuestion({ data: { id: q.id, answer: text.trim() } })
-          setBusy(false)
-          await router.invalidate()
+          try {
+            await answerQuestion({ data: { id: q.id, answer: text.trim() } })
+            await router.invalidate()
+          } finally {
+            setBusy(false)
+          }
         }}
       >
-        <input className="input py-1" value={text} onChange={(e) => setText(e.target.value)} placeholder="Your answer" />
-        <button className="btn btn-primary py-1" disabled={busy || !text.trim()}>
-          Save
+        <input className={`field min-w-[12rem] flex-1 ${compact ? 'text-[15px]' : ''}`} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your answer…" aria-label="Your answer" />
+        <button className="btn btn-sm" disabled={busy || !text.trim()}>
+          {busy ? 'Saving…' : 'Save'}
         </button>
         <button
           type="button"
-          className="muted px-1 text-xs underline"
+          className="font-sans text-[12px] text-muted underline underline-offset-4 hover:text-ink"
           onClick={async () => {
             await dismissQuestion({ data: { id: q.id } })
             await router.invalidate()

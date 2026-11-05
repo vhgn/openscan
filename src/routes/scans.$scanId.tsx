@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { useEffect } from 'react'
-import { Progress, SeverityBadge, StatusDot, TopBar } from '#/components/ui'
+import { Empty, ErrorNote, Lede, Margin, Page, Progress, SectionHead, Severity, StatusMark, Title, Verdict, phaseLabel, spell, timeAgo } from '#/components/ui'
 import { QuestionCard } from '#/components/QuestionCard'
 import { getScan, updateFindingStatus } from '#/server-fns/app'
 import type { RepoProfile, ScanSummary } from '#/lib/types'
@@ -15,17 +15,7 @@ const SOURCE_LABEL: Record<string, string> = {
   'supply-chain': 'supply-chain check',
 }
 
-function VerdictBadge({ verdict }: { verdict: string | null }) {
-  if (!verdict) return null
-  const style =
-    verdict === 'confirmed'
-      ? 'bg-emerald-600 text-white'
-      : verdict === 'needs_validation'
-        ? 'border border-amber-500 text-amber-600'
-        : 'bg-stone-400 text-white'
-  const label = verdict === 'confirmed' ? '✓ verified' : verdict === 'needs_validation' ? 'needs validation' : 'rejected'
-  return <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${style}`}>{label}</span>
-}
+const EFFORT: Record<string, string> = { small: 'under an hour', medium: 'about half a day', large: 'a few days' }
 
 function parseList(json: string | null): string[] {
   try {
@@ -36,291 +26,362 @@ function parseList(json: string | null): string[] {
   }
 }
 
+function engineLabel(engine: string | null, model: string | null) {
+  if (engine === 'codex') return 'Codex Cloud'
+  if (engine === 'ai') return model ? `ChatGPT (${model})` : 'ChatGPT'
+  if (engine === 'heuristic') return 'the built-in analyzer'
+  return engine ?? '…'
+}
+
 export const Route = createFileRoute('/scans/$scanId')({
   loader: ({ params }) => getScan({ data: { id: params.scanId } }),
-  head: () => ({ meta: [{ title: 'Scan — openscan' }] }),
+  head: () => ({ meta: [{ title: 'Security brief — openscan' }] }),
   component: ScanPage,
 })
 
 function ScanPage() {
   const d = Route.useLoaderData()
   const router = useRouter()
-  const live = d.scan.status === 'queued' || d.scan.status === 'running'
+  const s = d.scan
+  const live = s.status === 'queued' || s.status === 'running'
   useEffect(() => {
     if (!live) return
     const t = setInterval(() => router.invalidate(), 2000)
     return () => clearInterval(t)
   }, [live, router])
 
-  const summary = d.scan.kind === 'security' && d.scan.summary?.headline ? (d.scan.summary as ScanSummary) : null
-  const profile: RepoProfile | null = (d.scan.kind === 'understand' ? (d.scan.summary?.profile ?? d.profile) : d.profile) ?? null
+  const summary = s.kind === 'security' && s.summary?.headline ? (s.summary as ScanSummary) : null
+  const profile: RepoProfile | null = (s.kind === 'understand' ? (s.summary?.profile ?? d.profile) : d.profile) ?? null
   const open = d.findings.filter((f) => f.status === 'open')
   const closed = d.findings.filter((f) => f.status !== 'open')
+  const date = new Date(s.finished_at ?? s.created_at).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+  const v = summary?.validation
+  const candidates = v ? v.confirmed + v.rejected + v.needs_validation + v.unverified : 0
 
   return (
-    <div className="min-h-screen">
-      <TopBar
-        right={
-          <Link to="/dashboard" className="muted hover:underline">
-            ← Dashboard
-          </Link>
-        }
-      />
-      <main className="mx-auto max-w-5xl space-y-10 px-4 py-10">
-        <header>
-          <p className="muted text-sm">
-            {d.scan.kind === 'understand' ? 'Repository reading' : 'Security report'} · {d.scan.trigger} ·{' '}
-            {d.scan.engine === 'codex' ? 'Codex Cloud' : d.scan.engine === 'ai' ? `AI (${d.scan.model})` : d.scan.engine ?? '…'}
-            {d.scan.commit_sha && <> · <span className="font-mono">{d.scan.commit_sha.slice(0, 7)}</span></>}
-          </p>
-          <h1 className="mt-1 flex items-center gap-3 text-2xl font-bold tracking-tight">
-            <StatusDot status={d.scan.status} /> {d.scan.repo}
-          </h1>
-          {live && (
-            <div className="mt-4 max-w-md">
-              <Progress value={d.scan.progress} />
-              <p className="muted mt-1 text-xs">
-                {d.scan.phase} · {d.scan.progress}%
-              </p>
-            </div>
-          )}
-          {d.scan.status === 'failed' && <p className="mt-3 text-sm text-red-600">Failed: {d.scan.error}</p>}
-          {d.codexTasks.length > 0 && (
-            <p className="mt-3 flex flex-wrap gap-2 text-xs">
-              {d.codexTasks.map((t) => (
-                <a key={t.id} href={t.url} target="_blank" rel="noreferrer" className="rounded-full border hairline px-2.5 py-1 hover:border-[var(--muted)]">
-                  Codex {t.role} task · {t.status} ↗
-                </a>
-              ))}
-            </p>
-          )}
-        </header>
+    <Page user={d.user} crumb={s.repo}>
+      <p className="label">
+        {s.kind === 'understand' ? 'Repository reading' : 'Security brief'} · {s.repo} · {s.trigger}
+      </p>
+      <p className="mt-2 font-sans text-[13px] text-muted">
+        {date}
+        {s.commit_sha && (
+          <>
+            {' '}
+            · {/^[0-9a-f]{7,40}$/i.test(s.commit_sha) ? 'commit' : 'on'} <span className="font-mono">{/^[0-9a-f]{7,40}$/i.test(s.commit_sha) ? s.commit_sha.slice(0, 7) : s.commit_sha}</span>
+          </>
+        )}{' '}
+        · reviewed by {engineLabel(s.engine, s.model)}
+      </p>
 
-        {summary && (
-          <section className="app-card p-6">
-            <div className="flex flex-wrap items-center gap-3">
-              <span className="text-xs font-semibold uppercase tracking-wide">Overall risk</span>
-              <SeverityBadge severity={summary.riskLevel} />
-              <span className="muted text-xs">
-                {summary.filesReviewed} files reviewed · {summary.dependenciesChecked} dependencies checked
-                {summary.validation && summary.validation.confirmed + summary.validation.rejected + summary.validation.needs_validation > 0 && (
-                  <>
-                    {' '}· validator: {summary.validation.confirmed} verified, {summary.validation.needs_validation} need validation, {summary.validation.rejected} rejected
-                  </>
-                )}
-              </span>
-            </div>
-            <p className="mt-3 text-lg font-semibold">{summary.headline}</p>
-            <div className="mt-5 grid gap-6 md:grid-cols-2">
-              <div>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide">What matters</p>
-                <ul className="list-disc space-y-1 pl-5 text-sm">
-                  {summary.whatMatters.map((w) => (
-                    <li key={w}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-              <div>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide">What to do next</p>
-                <ol className="list-decimal space-y-2 pl-5 text-sm">
-                  {summary.nextActions.map((a) => (
-                    <li key={a.action}>
-                      <span className="font-medium">{a.action}</span> <span className="muted text-xs">({a.effort})</span>
-                      <span className="muted block text-xs">{a.why}</span>
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            </div>
-            {summary.memory && summary.memory.skippedFiles + summary.memory.reusedVerdicts > 0 && (
-              <p className="muted mt-4 text-xs">
-                Product memory: skipped {summary.memory.skippedFiles} file(s) already reviewed at this version and reused {summary.memory.reusedVerdicts} earlier verdict(s).
-              </p>
-            )}
-            {summary.needsValidation && summary.needsValidation.length > 0 && (
-              <div className="mt-5 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-                <p className="text-xs font-semibold uppercase tracking-wide">Needs your input (no severity until answered)</p>
-                <ul className="mt-1 list-disc space-y-1 pl-5">
-                  {summary.needsValidation.map((n) => (
-                    <li key={n.title}>
-                      <span className="font-medium">{n.title}</span>
-                      {n.missingFact && <span className="muted block text-xs">{n.missingFact}</span>}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {summary.engineNote && <p className="muted mt-4 text-xs">{summary.engineNote}</p>}
-          </section>
-        )}
+      {/* headline */}
+      {summary ? (
+        <Title className="mt-6">{summary.headline}</Title>
+      ) : s.kind === 'understand' ? (
+        <Title className="mt-6">{live ? `Reading ${s.repo}.` : s.status === 'failed' ? `Reading ${s.repo} failed.` : `What we learned about ${s.repo}.`}</Title>
+      ) : (
+        <Title className="mt-6">{s.status === 'failed' ? 'This review did not finish.' : 'The review is under way.'}</Title>
+      )}
 
-        {profile && d.scan.kind === 'understand' && (
-          <section className="app-card p-6 text-sm">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wide">What the AI learned</p>
-            <p>{profile.summary}</p>
-            <dl className="mt-4 grid gap-x-6 gap-y-2 sm:grid-cols-2">
-              {(
-                [
-                  ['Stack', profile.stack.join(', ')],
-                  ['Entry points', profile.entryPoints.join(', ')],
-                  ['Data stores', profile.dataStores.join(', ')],
-                  ['Auth', profile.auth],
-                  ['External services', profile.externalServices.join(', ')],
-                  ['Deployment', profile.deployment],
-                  ['Sensitive areas', profile.sensitiveAreas.join(', ')],
-                ] as const
-              ).map(([k, v]) => (
-                <div key={k}>
-                  <dt className="muted text-xs">{k}</dt>
-                  <dd>{v || 'Unknown'}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        )}
+      {live && (
+        <div className="mt-8 max-w-md">
+          <div className="mb-2 flex items-center gap-2 font-sans text-[13px] text-muted">
+            <StatusMark status={s.status} /> {phaseLabel(s.phase)} · {s.progress}%
+          </div>
+          <Progress value={s.progress} />
+          <p className="mt-3 text-[16px] italic text-muted">This page updates by itself. You can leave; the brief will be on your dashboard.</p>
+        </div>
+      )}
+      {s.status === 'failed' && <ErrorNote>Failed: {s.error}</ErrorNote>}
 
-        {d.questions.length > 0 && (
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide">Questions raised during this scan</h2>
-            <div className="grid gap-2 md:grid-cols-2">
-              {d.questions.map((q) => (
-                <QuestionCard key={q.id} q={q} />
-              ))}
-            </div>
-          </section>
-        )}
+      {d.codexTasks.length > 0 && (
+        <p className="mt-6 font-sans text-[13px] text-muted">
+          Codex Cloud tasks:{' '}
+          {d.codexTasks.map((t, i) => (
+            <span key={t.id}>
+              {i > 0 && ' · '}
+              <a href={t.url} target="_blank" rel="noreferrer" className="link text-ink-3">
+                {t.role} ({t.status}) ↗
+              </a>
+            </span>
+          ))}
+        </p>
+      )}
 
-        {d.scan.kind === 'security' && (
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide">Findings ({open.length})</h2>
-            <div className="space-y-3">
-              {open.map((f) => (
-                <details key={f.id} id={`f-${f.id}`} className="app-card group p-4" open={open.length <= 3}>
-                  <summary className="flex cursor-pointer list-none items-start gap-3">
-                    <span className="flex flex-col items-start gap-1">
-                      <SeverityBadge severity={f.severity} />
-                      <VerdictBadge verdict={f.verdict} />
-                    </span>
-                    <span className="flex-1">
-                      <span className="font-medium">
-                        {f.priority ? <span className="muted mr-1">#{f.priority}</span> : null}
-                        {f.title}
-                      </span>
-                      <span className="muted block text-xs">
-                        {f.category}
-                        {f.file ? ` · ${f.file}${f.line ? `:${f.line}` : ''}` : ''} · confidence {f.confidence}
-                        {f.source ? ` · ${SOURCE_LABEL[f.source] ?? f.source}` : ''}
-                      </span>
-                    </span>
-                  </summary>
-                  <div className="mt-3 space-y-2 pl-1 text-sm">
-                    {f.threat_model && <p className="font-medium">{f.threat_model}</p>}
-                    <p className="whitespace-pre-line">{f.description}</p>
-                    {parseList(f.trace_json).length > 0 && (
-                      <div>
-                        <p className="font-semibold">Source → sink</p>
-                        <ol className="mt-1 list-decimal space-y-0.5 pl-5 font-mono text-xs">
-                          {parseList(f.trace_json).map((t) => (
-                            <li key={t}>{t}</li>
-                          ))}
-                        </ol>
-                      </div>
-                    )}
-                    {f.impact && (
-                      <p>
-                        <span className="font-semibold">Impact: </span>
-                        {f.impact}
-                      </p>
-                    )}
-                    {f.recommendation && (
-                      <p>
-                        <span className="font-semibold">Fix: </span>
-                        {f.recommendation}
-                      </p>
-                    )}
-                    {f.verification && (
-                      <div className="rounded-lg border hairline p-3">
-                        <p className="font-semibold">Independent validation</p>
-                        <p className="muted mt-1 whitespace-pre-line text-xs">{f.verification}</p>
-                      </div>
-                    )}
-                    {f.poc && (
-                      <div>
-                        <p className="font-semibold">Research / proof of concept</p>
-                        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded-lg bg-[color-mix(in_srgb,var(--fg)_6%,transparent)] p-3 font-mono text-xs">{f.poc}</pre>
-                      </div>
-                    )}
-                    <div className="flex gap-3 pt-1 text-xs">
-                      {(['fixed', 'dismissed'] as const).map((s) => (
-                        <button
-                          key={s}
-                          className="muted underline"
-                          onClick={async () => {
-                            await updateFindingStatus({ data: { id: f.id, status: s } })
-                            await router.invalidate()
-                          }}
-                        >
-                          Mark {s}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </details>
-              ))}
-              {open.length === 0 && !live && <p className="muted text-sm">No open findings.</p>}
-              {closed.length > 0 && (
-                <details className="text-xs">
-                  <summary className="muted cursor-pointer">{closed.length} finding(s) rejected by the validator, dismissed as false positives, or marked fixed</summary>
-                  <ul className="mt-2 space-y-2">
-                    {closed.map((f) => (
-                      <li key={f.id} className="rounded-lg border hairline p-2">
-                        <span className="font-medium">{f.title}</span> <span className="muted">({f.status}{f.verdict ? `, ${f.verdict}` : ''})</span>
-                        {f.verification && <p className="muted mt-1 whitespace-pre-line">{f.verification}</p>}
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-            </div>
-          </section>
-        )}
+      {summary && (
+        <>
+          <Lede>
+            Overall risk is <span className="squiggle italic">{summary.riskLevel}</span>.{' '}
+            {v && candidates > 0 ? (
+              <>
+                Of {spell(candidates)} candidate issue{candidates === 1 ? '' : 's'}, an independent validator confirmed {spell(v.confirmed)}, rejected {spell(v.rejected, 'none')}, and left{' '}
+                {spell(v.needs_validation, 'none')} for you to decide.{' '}
+              </>
+            ) : null}
+            We read {summary.filesReviewed} file{summary.filesReviewed === 1 ? '' : 's'} and checked {summary.dependenciesChecked} dependenc{summary.dependenciesChecked === 1 ? 'y' : 'ies'}
+            {summary.memory && summary.memory.skippedFiles + summary.memory.reusedVerdicts > 0 ? (
+              <>
+                ; product memory let us skip {summary.memory.skippedFiles} unchanged file{summary.memory.skippedFiles === 1 ? '' : 's'} and reuse {summary.memory.reusedVerdicts} earlier verdict
+                {summary.memory.reusedVerdicts === 1 ? '' : 's'}
+              </>
+            ) : null}
+            .
+          </Lede>
+          {summary.engineNote && <p className="mt-3 font-sans text-[13px] text-muted">{summary.engineNote}</p>}
 
-        {d.skills.length > 0 && (
-          <section>
-            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide">
-              Methodology <span className="muted font-normal normal-case">— agentic security skills applied in this scan</span>
-            </h2>
-            <ul className="flex flex-wrap gap-2 text-xs">
-              {d.skills.map((id) => {
-                const sk = SKILL_BY_ID[id]
-                return sk ? (
-                  <li key={id}>
-                    <a href={sk.repoUrl} target="_blank" rel="noreferrer" className="inline-block rounded-full border hairline px-2.5 py-1 hover:border-[var(--muted)]" title={sk.howUsed}>
-                      {sk.name} <span className="muted">· {sk.publisher}</span>
-                    </a>
+          {summary.whatMatters.length > 0 && (
+            <>
+              <SectionHead className="mt-14">What matters</SectionHead>
+              <ul className="mt-4 space-y-3 text-[19px] leading-[1.6]">
+                {summary.whatMatters.map((m) => (
+                  <li key={m} className="grid grid-cols-[1.25rem_1fr]">
+                    <span className="text-gold">—</span>
+                    <span>{m}</span>
                   </li>
-                ) : null
-              })}
-            </ul>
-            <p className="muted mt-2 text-xs">
-              <Link to="/skills" className="underline">
-                How each skill is used
-              </Link>
-            </p>
-          </section>
-        )}
+                ))}
+              </ul>
+            </>
+          )}
 
-        <section>
-          <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide">Activity</h2>
-          <ol className="app-card max-h-80 space-y-1 overflow-y-auto p-4 font-mono text-xs">
+          {summary.nextActions.length > 0 && (
+            <>
+              <SectionHead className="mt-14">What to do next</SectionHead>
+              <ol className="mt-4 space-y-5 text-[19px] leading-[1.6]">
+                {summary.nextActions.map((a, i) => (
+                  <li key={a.action} className="relative grid grid-cols-[1.75rem_1fr]">
+                    <span className="font-display text-[24px] leading-none">{i + 1}.</span>
+                    <span>
+                      {a.action} <span className="text-ink-3">{a.why}</span>
+                    </span>
+                    <Margin>Effort: {EFFORT[a.effort] ?? a.effort}</Margin>
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+
+          {summary.needsValidation && summary.needsValidation.length > 0 && (
+            <>
+              <SectionHead className="mt-14">Waiting on one fact from you</SectionHead>
+              <p className="mt-3 text-[17px] leading-[1.6] text-ink-3">These have no severity yet. Each depends on something only your team knows; answer below and the next scan settles it.</p>
+              <ul className="mt-4 space-y-3 text-[18px] leading-[1.55]">
+                {summary.needsValidation.map((n) => (
+                  <li key={n.title}>
+                    <span className="font-medium">{n.title}.</span> {n.missingFact && <span className="italic text-amber">{n.missingFact}</span>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      )}
+
+      {/* understand scans: the profile, written out */}
+      {profile && s.kind === 'understand' && (
+        <>
+          <Lede>{profile.summary}</Lede>
+          <dl className="mt-10 space-y-4 text-[17px] leading-[1.55]">
+            {(
+              [
+                ['Stack', profile.stack.join(', ')],
+                ['Entry points', profile.entryPoints.join(', ')],
+                ['Data stores', profile.dataStores.join(', ')],
+                ['Authentication', profile.auth],
+                ['External services', profile.externalServices.join(', ')],
+                ['Deployment', profile.deployment],
+                ['Sensitive areas', profile.sensitiveAreas.join(', ')],
+              ] as const
+            ).map(([k, val]) => (
+              <div key={k} className="grid gap-1 border-t border-rule pt-3 sm:grid-cols-[10rem_1fr] sm:gap-6">
+                <dt className="label pt-1.5">{k}</dt>
+                <dd className={val ? '' : 'italic text-muted'}>{val || 'Not found in the code'}</dd>
+              </div>
+            ))}
+          </dl>
+          {profile.notes.length > 0 && (
+            <ul className="mt-6 space-y-2 font-sans text-[13px] leading-snug text-muted">
+              {profile.notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+
+      {/* findings */}
+      {s.kind === 'security' && (
+        <>
+          <SectionHead aside={open.length ? `${open.length} open` : undefined}>Findings, in the order we would fix them</SectionHead>
+          <div className="mt-6 space-y-12">
+            {open.length === 0 && !live && <Empty>No open findings. Nothing here needs your attention.</Empty>}
+            {open.map((f, i) => {
+              const trace = parseList(f.trace_json)
+              return (
+                <section key={f.id} id={`f-${f.id}`} className="relative scroll-mt-8 border-t border-rule pt-6">
+                  <p className="flex flex-wrap items-baseline gap-x-2 font-sans text-[12px] uppercase tracking-[0.16em] text-muted">
+                    <span>№{f.priority ?? i + 1}</span>·<Severity severity={f.severity} />·<span>{f.category}</span>
+                    {f.source && (
+                      <>
+                        ·<span className="normal-case tracking-normal">{SOURCE_LABEL[f.source] ?? f.source}</span>
+                      </>
+                    )}
+                  </p>
+                  <h3 className="mt-2 font-display text-[30px] leading-[1.15]">{f.title}</h3>
+                  <p className="mt-1 font-sans text-[13px] text-muted">
+                    {f.file && (
+                      <>
+                        <span className="font-mono">
+                          {f.file}
+                          {f.line ? `:${f.line}` : ''}
+                        </span>{' '}
+                        ·{' '}
+                      </>
+                    )}
+                    <Verdict verdict={f.verdict} /> {f.confidence && <>· {f.confidence} confidence</>}
+                  </p>
+                  {f.threat_model && <p className="mt-4 text-[19px] italic leading-[1.55]">{f.threat_model}</p>}
+                  <p className="mt-3 whitespace-pre-line text-[18px] leading-[1.65] text-ink-2">{f.description}</p>
+                  {trace.length > 0 && (
+                    <ol className="mt-4 space-y-1 border-l border-ink/20 pl-4 font-mono text-[12.5px] leading-relaxed text-ink-3">
+                      {trace.map((t) => (
+                        <li key={t}>{t}</li>
+                      ))}
+                    </ol>
+                  )}
+                  {f.impact && (
+                    <p className="mt-4 text-[18px] leading-[1.65]">
+                      <span className="italic">Impact. </span>
+                      {f.impact}
+                    </p>
+                  )}
+                  {f.recommendation && (
+                    <p className="mt-3 text-[18px] leading-[1.65]">
+                      <span className="italic">The fix. </span>
+                      {f.recommendation}
+                    </p>
+                  )}
+                  {f.poc && (
+                    <>
+                      <p className="label mt-5">Proof of concept</p>
+                      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap bg-wash p-4 font-mono text-[12px] leading-relaxed text-ink-2">{f.poc}</pre>
+                    </>
+                  )}
+                  {f.verification &&
+                    (f.verification.length <= 320 ? (
+                      <Margin>
+                        <span className="label block">Validator</span>
+                        <span className="mt-1 block whitespace-pre-line">{f.verification}</span>
+                      </Margin>
+                    ) : (
+                      // Long notes would run past the section in the margin; set them inline instead.
+                      <div className="mt-5 border-l border-gold pl-4 font-sans text-[13px] leading-relaxed text-muted">
+                        <span className="label block">Validator</span>
+                        <span className="mt-1 block whitespace-pre-line">{f.verification}</span>
+                      </div>
+                    ))}
+                  <p className="mt-5 flex gap-4 font-sans text-[12.5px] text-muted">
+                    {(['fixed', 'dismissed'] as const).map((st) => (
+                      <button
+                        key={st}
+                        className="underline underline-offset-4 hover:text-ink"
+                        onClick={async () => {
+                          await updateFindingStatus({ data: { id: f.id, status: st } })
+                          await router.invalidate()
+                        }}
+                      >
+                        {st === 'fixed' ? 'Mark fixed' : 'Not a problem'}
+                      </button>
+                    ))}
+                  </p>
+                </section>
+              )
+            })}
+          </div>
+
+          {closed.length > 0 && (
+            <>
+              <SectionHead>Set aside</SectionHead>
+              <p className="mt-3 text-[17px] leading-[1.6] text-ink-3">Rejected by the validator, dismissed by you, or fixed. Kept so you can check the reasoning.</p>
+              <ul className="mt-4 space-y-3 text-[16px] leading-[1.55]">
+                {closed.map((f) => (
+                  <li key={f.id}>
+                    <span className="text-muted line-through decoration-ink/40">{f.title}.</span>{' '}
+                    <span className="font-sans text-[12px] uppercase tracking-[0.12em] text-muted">{f.status === 'open' ? f.verdict : f.status}</span>
+                    {f.verification && <span className="mt-0.5 block whitespace-pre-line text-ink-3">{f.verification}</span>}
+                    {f.status !== 'open' && (
+                      <button
+                        className="mt-0.5 block font-sans text-[12px] text-muted underline underline-offset-4 hover:text-ink"
+                        onClick={async () => {
+                          await updateFindingStatus({ data: { id: f.id, status: 'open' } })
+                          await router.invalidate()
+                        }}
+                      >
+                        reopen
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      )}
+
+      {d.questions.length > 0 && (
+        <>
+          <SectionHead>Questions raised while reading</SectionHead>
+          <div className="mt-5 space-y-7">
+            {d.questions.map((q) => (
+              <QuestionCard key={q.id} q={q} />
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* colophon */}
+      <footer className="mt-20 border-t border-rule pt-6 font-sans text-[12.5px] leading-relaxed text-muted">
+        {d.skills.length > 0 && (
+          <p>
+            <span className="uppercase tracking-[0.18em]">Colophon.</span> Methods applied in this review:{' '}
+            {d.skills.map((id, i) => {
+              const sk = SKILL_BY_ID[id]
+              if (!sk) return null
+              return (
+                <span key={id}>
+                  {i > 0 && ', '}
+                  <a href={sk.repoUrl} target="_blank" rel="noreferrer" title={sk.howUsed} className="underline decoration-ink/25 underline-offset-2 hover:text-ink">
+                    {sk.name}
+                  </a>{' '}
+                  ({sk.publisher})
+                </span>
+              )
+            })}
+            .{' '}
+            <Link to="/skills" className="underline underline-offset-2 hover:text-ink">
+              How each method is used
+            </Link>
+            .
+          </p>
+        )}
+        <details className="mt-4">
+          <summary className="cursor-pointer hover:text-ink">
+            Activity log ({d.events.length} entries) · scan {s.id}
+          </summary>
+          <ol className="mt-3 max-h-80 space-y-1 overflow-y-auto font-mono text-[11.5px]">
             {d.events.map((e) => (
-              <li key={e.id} className={e.level === 'error' ? 'text-red-500' : e.level === 'warn' ? 'text-amber-600' : ''}>
-                <span className="muted" suppressHydrationWarning>{new Date(e.ts).toLocaleTimeString()}</span> {e.message}
+              <li key={e.id} className={e.level === 'error' ? 'text-alarm' : e.level === 'warn' ? 'text-amber' : ''}>
+                <span className="text-faint">{new Date(e.ts).toLocaleTimeString()}</span> {e.message}
               </li>
             ))}
           </ol>
-        </section>
-      </main>
-    </div>
+        </details>
+        <p className="mt-4">
+          <Link to="/dashboard" className="underline underline-offset-2 hover:text-ink">
+            ← Back to the brief
+          </Link>{' '}
+          · started {timeAgo(s.created_at)}
+        </p>
+      </footer>
+    </Page>
   )
 }

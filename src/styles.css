@@ -1,106 +1,172 @@
 @import 'tailwindcss';
 
+/*
+ * openscan — "Essay" design system.
+ * Paper and ink, Newsreader for reading, Instrument Serif for display, Inter for
+ * small labels and controls, JetBrains Mono for code. Emphasis is a cream squiggle.
+ */
 @theme {
   --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: 'Newsreader', ui-serif, Georgia, serif;
+  --font-display: 'Instrument Serif', ui-serif, Georgia, serif;
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-serif: 'Fraunces', ui-serif, Georgia, serif;
+
+  --color-paper: #fbfbf9;
+  --color-wash: #f1f1ec;
+  --color-ink: #141414;
+  --color-ink-2: #2b2b28;
+  --color-ink-3: #4a4a46;
+  --color-muted: #6f6f6a;
+  --color-faint: #9a9a94;
+  --color-rule: rgb(20 20 20 / 0.12);
+  --color-cream: #e3c98b;
+  --color-gold: #b9a46a;
+  --color-amber: #8a6d1f;
+  --color-alarm: #9b2c2c;
 }
 
 :root {
-  --bg: #fafaf9;
-  --fg: #0c0a09;
-  --muted: #78716c;
-  --line: #e7e5e4;
-  --card: #ffffff;
-  --accent: #4f46e5;
   color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0c0a09;
-    --fg: #fafaf9;
-    --muted: #a8a29e;
-    --line: #292524;
-    --card: #1c1917;
-    --accent: #818cf8;
-    color-scheme: dark;
-  }
 }
 
 html,
 body {
-  background: var(--bg);
-  color: var(--fg);
+  background: var(--color-paper);
+  color: var(--color-ink);
 }
 
-.app-card {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 0.75rem;
-}
-.muted {
-  color: var(--muted);
-}
-.hairline {
-  border-color: var(--line);
-}
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.9rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-  transition: opacity 0.15s, transform 0.15s;
-  cursor: pointer;
-}
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn-primary {
-  background: var(--fg);
-  color: var(--bg);
-}
-.btn-primary:hover:not(:disabled) {
-  opacity: 0.85;
-}
-.btn-ghost {
-  border: 1px solid var(--line);
-}
-.btn-ghost:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--fg) 5%, transparent);
-}
-.input {
-  width: 100%;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.875rem;
-}
-.input:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
+::selection {
+  background: color-mix(in srgb, var(--color-cream) 55%, transparent);
 }
 
-.sev-critical { background: #7f1d1d; color: #fee2e2; }
-.sev-high { background: #dc2626; color: #fff; }
-.sev-medium { background: #f59e0b; color: #1c1917; }
-.sev-low { background: #3b82f6; color: #fff; }
-.sev-info, .sev-none { background: #a8a29e; color: #1c1917; }
+@layer components {
+  /* small caps-style label used for section heads */
+  .label {
+    font-family: var(--font-sans);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    color: var(--color-muted);
+  }
+  .squiggle {
+    text-decoration-line: underline;
+    text-decoration-style: wavy;
+    text-decoration-color: var(--color-cream);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 6px;
+    text-decoration-skip-ink: none;
+  }
+  .link {
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 4px;
+  }
+  .link:hover {
+    text-decoration-thickness: 2px;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1.15rem;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 600;
+    background: var(--color-ink);
+    color: var(--color-paper);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .btn:hover:not(:disabled) {
+    background: #333;
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .btn-quiet {
+    background: transparent;
+    color: var(--color-ink);
+    box-shadow: inset 0 0 0 1px rgb(20 20 20 / 0.35);
+  }
+  .btn-quiet:hover:not(:disabled) {
+    background: rgb(20 20 20 / 0.04);
+  }
+  .btn-sm {
+    padding: 0.35rem 0.8rem;
+    font-size: 13px;
+  }
+
+  /* text inputs: a ruled line, like filling in a form on paper */
+  .field {
+    width: 100%;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid rgb(20 20 20 / 0.4);
+    padding: 0.3rem 0;
+    font-family: var(--font-serif);
+    font-size: 17px;
+    color: var(--color-ink);
+    border-radius: 0;
+  }
+  .field::placeholder {
+    color: var(--color-faint);
+  }
+  .field:focus {
+    outline: none;
+    border-bottom-color: var(--color-ink);
+    box-shadow: 0 1px 0 0 var(--color-ink);
+  }
+  textarea.field {
+    border: 1px solid rgb(20 20 20 / 0.25);
+    padding: 0.6rem 0.75rem;
+    line-height: 1.55;
+  }
+  textarea.field:focus {
+    border-color: var(--color-ink);
+    box-shadow: none;
+  }
+  select.field {
+    cursor: pointer;
+    padding-right: 1.25rem;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: var(--color-ink);
+  }
+}
 
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
 }
 .pulse-dot {
   animation: pulse-dot 1.4s ease-in-out infinite;
 }
 
-/* Login with ChatGPT widget: blend with our UI */
-.lwc-button {
-  border-radius: 0.5rem !important;
+/* Login with ChatGPT widget: restyle its button as our ink button (wrapper raises specificity) */
+.lwc-essay .lwc-btn {
+  background: var(--color-ink);
+  color: var(--color-paper);
+  border-radius: 0;
+  box-shadow: none;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  padding: 0.7rem 1.2rem;
+}
+.lwc-essay .lwc-btn:hover:not(:disabled) {
+  background: #333;
+  transform: none;
+  box-shadow: none;
+}
+.lwc-essay .lwc-btn:focus-visible {
+  outline-color: var(--color-gold);
 }

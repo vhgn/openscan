@@ -11,7 +11,7 @@ Visitors are **engineering team leads and CTOs**. They don't want a 400-row scan
 ## Requirements (from the product owner)
 
 1. **Installable GitHub App.** Read-only access to the repositories the user picks.
-2. **Landing page + `/design`.** `/design` shows **3 landing page options**. The owner approves one and it becomes `/`. Every option has a clear call to action ("Connect GitHub").
+2. **Landing page + `/design`.** `/design` showed **landing page options** for the owner to pick from; the chosen one (Essay) is `/`, with a clear call to action ("Connect GitHub").
 3. **Sign-in and onboarding:**
    1. Log in with GitHub (GitHub App user authorization).
    2. Onboarding: select repositories, or update the GitHub App's repository selection on github.com and come back.
@@ -23,17 +23,15 @@ Visitors are **engineering team leads and CTOs**. They don't want a 400-row scan
 
 6. **Products.** Several repositories can be scanned as one **product**. The product has a **unified memory** so agents don't check the same things every time: shared facts and answers, files already reviewed at the same version, and validator verdicts on unchanged code.
 
-## Landing page directions (`/design`)
+## Design: Essay (chosen)
 
-| Option | Direction | Status |
-| --- | --- | --- |
-| A · Console | Terminal. The whole page is a full-screen amber-phosphor TUI: block-letter wordmark, box-drawn panes (brief, findings list with verdicts, pipeline progress), function-key bar. | candidate |
-| B · Essay | Text-centric. A short argument addressed to engineering leaders, set as a long read: one column, margin notes, highlighter marks, a sample brief typeset inline. | candidate |
-| C · Guilloche | Artistic. Banknote security printing (the craft built to stop forgery): malachite field, guilloche rosettes and an engraved eye of Argus Panoptes computed in SVG, microtext borders, serial numbers. | candidate |
+The owner reviewed six directions over three rounds on `/design` (Aurora; Signal, Ledger, Redline; Console, Essay, Guilloche) and chose **Essay**: text is the product.
 
-Earlier rounds (Signal, Ledger, Redline, and before that Aurora) were replaced at the owner's request.
-
-Approval is stored in D1 (`app_settings.landing_design`). Until something is approved, `/` shows option A with a banner pointing to `/design`. Set `ADMIN_GITHUB_LOGINS` to restrict who can approve. Screenshots are in [`docs/design/`](./docs/design).
+- **Landing (`/`):** a short argument addressed to engineering leaders, set as a long read with margin notes and a sample brief inline. CTA: "Connect GitHub".
+- **Signed-in pages:** the same system everywhere. The dashboard is *the brief* (a one-sentence headline, questions, open findings, products, earlier briefs). A scan report reads as a typeset document: headline, risk in a sentence, what matters, numbered next actions with effort in the margin, findings in fix order with the validator's note beside each, set-aside findings, questions, and a colophon of the methods used.
+- **Look:** paper `#fbfbf9` and ink `#141414`; Newsreader for reading, Instrument Serif for display, Inter for labels and controls, JetBrains Mono for code. Emphasis is a cream wavy underline, never a highlighter fill. Severity is a word in small caps.
+- `/design` now shows the chosen style and a sample brief (also linked from the landing page as "See a sample brief"). Screenshots are in [`docs/design/`](./docs/design) and [`docs/screens/`](./docs/screens).
+- **Rendering:** only `/` is server-rendered; signed-in pages render in the browser.
 
 ## User flow
 
@@ -44,11 +42,15 @@ landing (/) ──CTA──▶ GitHub OAuth ──▶ onboarding
                                       3. preferences   ◀── live panel: reading progress + AI questions
                                                           (AI self-answers; the user answers the rest)
                                       4. reading       ──▶ first security report auto-queued per repo
-                                   ──▶ dashboard: questions · findings · scans
-                                         └─▶ /scans/:id: risk, what matters, next actions, findings, PoC, live log
+                                   ──▶ dashboard (the brief): questions · findings · products · earlier briefs
+                                         ├─▶ /scans/:id: risk, what matters, next actions, findings, PoC, live log
+                                         ├─▶ /products/:id: repositories and product memory
+                                         └─▶ /settings: repositories, ChatGPT, Codex environments, preferences
 ```
 
 ## Preferences (saved per user)
+
+Asked during onboarding and editable any time on `/settings`.
 
 | Preference | Values | Effect |
 | --- | --- | --- |

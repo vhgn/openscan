@@ -26,7 +26,7 @@ import {
   saveProduct,
 } from '#/lib/products'
 import { uid } from '#/lib/db'
-import { isDemoLoginEnabled, str } from '#/lib/env'
+import { isDemoLoginEnabled } from '#/lib/env'
 import { preferencesSchema, type OnboardingStep, type UserRow } from '#/lib/types'
 
 function publicUser(u: UserRow) {
@@ -76,41 +76,6 @@ export const getMe = createServerFn({ method: 'GET' }).handler(async () => {
     demoLogin: isDemoLoginEnabled(),
   }
 })
-
-// ------------------------------------------------------------------ landing design
-
-export const DESIGNS = ['essay', 'guilloche'] as const
-export type DesignId = (typeof DESIGNS)[number]
-
-export const getDesign = createServerFn({ method: 'GET' }).handler(async () => {
-  const row = await first<{ value: string; updated_by: string | null; updated_at: number }>(`SELECT value, updated_by, updated_at FROM app_settings WHERE key = 'landing_design'`)
-  const user = await currentUser()
-  const admins = str('ADMIN_GITHUB_LOGINS').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
-  return {
-    // An approval of a design that no longer exists counts as no approval.
-    approved: row && (DESIGNS as readonly string[]).includes(row.value) ? (row.value as DesignId) : null,
-    approvedBy: row?.updated_by ?? null,
-    approvedAt: row?.updated_at ?? null,
-    canApprove: Boolean(user) && (admins.length === 0 || admins.includes(user!.login.toLowerCase())),
-    signedIn: Boolean(user),
-  }
-})
-
-export const approveDesign = createServerFn({ method: 'POST' })
-  .validator(z.object({ design: z.enum(DESIGNS) }))
-  .handler(async ({ data }) => {
-    const user = await requireUser()
-    const admins = str('ADMIN_GITHUB_LOGINS').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)
-    if (admins.length && !admins.includes(user.login.toLowerCase())) throw new Error('Only admins can approve a design')
-    await run(
-      `INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ('landing_design', ?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
-      data.design,
-      user.login,
-      now(),
-    )
-    return { ok: true }
-  })
 
 // ------------------------------------------------------------------ onboarding
 
@@ -273,7 +238,7 @@ export const getScan = createServerFn({ method: 'GET' })
     const user = await authed()
     const detail = await scanDetail(user.id, data.id)
     if (!detail) throw redirect({ to: '/dashboard' })
-    return detail
+    return { ...detail, user: publicUser(user) }
   })
 
 export const startScan = createServerFn({ method: 'POST' })
