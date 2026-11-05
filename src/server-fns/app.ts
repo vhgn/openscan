@@ -10,7 +10,7 @@ import { listInstallTargets, listUserRepos, syncUserRepos } from '#/lib/github/r
 import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
 import { createScan, loadPreferences } from '#/lib/scanner/engine'
 import { listFindings, listQuestions, listScans, scanDetail } from '#/lib/queries'
-import { codexClientFor, codexEnvironmentFor } from '#/lib/codex/runtime'
+import { codexClientFor, codexEnvironmentFor, openscanHost, settleInternetProbes, startInternetProbe } from '#/lib/codex/runtime'
 import { environmentsSettingsUrl } from '#/lib/codex/cloud'
 import {
   deleteProduct,
@@ -96,8 +96,9 @@ async function onboardingData(user: UserRow) {
     step: user.onboarding_step,
     installUrl: installUrl(),
     installations: installations.map((i) => ({ ...i, manageUrl: manageInstallationUrl(i.id, i.account_type, i.account_login) })),
-    repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, private: Boolean(r.private), language: r.language, description: r.description, selected: Boolean(r.selected), understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at) })),
+    repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, private: Boolean(r.private), language: r.language, description: r.description, selected: Boolean(r.selected), understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at), codexNet: r.codex_net, codexNetAt: r.codex_net_at })),
     codexEnvironmentsUrl: environmentsSettingsUrl(),
+    openscanHost: openscanHost(),
     reading: scans.map((s) => ({ ...s, repo: repos.find((r) => r.id === s.repo_id)?.full_name ?? '' })),
     questions: await listQuestions(user.id, ['open', 'auto_answered', 'answered'], selected),
     preferences: await loadPreferences(user.id),
@@ -274,6 +275,22 @@ export const refreshCodexEnvironments = createServerFn({ method: 'POST' }).handl
   let found = 0
   for (const r of repos) if (await codexEnvironmentFor(user.id, r, client, true).catch(() => null)) found++
   return { ok: true as const, found, total: repos.length }
+})
+
+/** Starts a tiny Codex task that checks whether the repo's environment can reach openscan. */
+export const testCodexInternet = createServerFn({ method: 'POST' })
+  .validator(z.object({ repoId: z.number().int() }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    const repo = (await listUserRepos(user.id)).find((r) => r.id === data.repoId && r.selected)
+    if (!repo) return { ok: false as const, reason: 'Repository not linked' }
+    return startInternetProbe(user, repo)
+  })
+
+/** Settles running internet checks; the settings page polls this while any is running. */
+export const checkCodexInternet = createServerFn({ method: 'POST' }).handler(async () => {
+  const user = await requireUser()
+  return settleInternetProbes(user)
 })
 
 // ------------------------------------------------------------------ products & memory

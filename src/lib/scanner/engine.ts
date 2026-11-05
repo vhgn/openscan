@@ -42,6 +42,7 @@ import { acquireLease, releaseLease, STALL_MS, STALLED_SCANS_SQL } from './lease
 import { codexClientFor, codexEnvironmentFor } from '../codex/runtime'
 import { environmentsSettingsUrl, taskUrl } from '../codex/cloud'
 import * as CP from '../codex/prompts'
+import { attachTask, issueAgentToken, revokeAgentToken, revokeScanTokens, setCodexNet } from '../codex/agent-tokens'
 import {
   ensureDefaultProduct,
   memoryContext,
@@ -105,7 +106,7 @@ interface ScanState {
   /** Findings whose verdict was reused from product memory. */
   memoryVerdicts?: number
   /** Codex Cloud runtime state. */
-  codex?: { envId: string; envLabel: string | null; tasks: Partial<Record<CP.CodexRole, { id: string; startedAt: number; status?: string }>> }
+  codex?: { envId: string; envLabel: string | null; tasks: Partial<Record<CP.CodexRole, { id: string; startedAt: number; status?: string; tokenHash?: string }>> }
 }
 
 // ---------------------------------------------------------------- public API
@@ -190,9 +191,12 @@ async function leasedStep(scanId: string, leaseId: string): Promise<number | nul
     repo,
     state: parseJson<ScanState>(scan.state_json, {}),
     prefs: await loadPreferences(user.id),
+    ownerContext: '',
+    memory: '',
     llm: null,
     product: (await productForRepo(user.id, repo.id)) ?? null,
   }
+  ctx.ownerContext = ctx.prefs.context
   if (!ctx.product) {
     // Every repo lives in a product so memory always has a home.
     await ensureDefaultProduct(user.id, repo.full_name.split('/')[0], [repo.id])
@@ -201,9 +205,11 @@ async function leasedStep(scanId: string, leaseId: string): Promise<number | nul
 
   try {
     ctx.llm = await resolveEngine(ctx)
-    if (ctx.llm && ctx.product) {
-      const mem = await memoryContext(ctx.product.id, repo.id, { skipPaths: ctx.state.memorySkipped })
-      if (mem) ctx.prefs = { ...ctx.prefs, context: [ctx.prefs.context, mem].filter(Boolean).join('\n\n') }
+    // Polling a running Codex task never builds a prompt, so it needs no memory.
+    const polling = scan.engine === 'codex' && scan.phase.endsWith('_wait')
+    if (ctx.llm && ctx.product && !polling) {
+      ctx.memory = await memoryContext(ctx.product.id, repo.id, { skipPaths: ctx.state.memorySkipped })
+      if (ctx.memory) ctx.prefs = { ...ctx.prefs, context: [ctx.prefs.context, ctx.memory].filter(Boolean).join('\n\n') }
     }
     const result = scan.kind === 'understand' ? await understandStep(ctx) : await securityStep(ctx)
     const saved = await exec(
@@ -247,6 +253,10 @@ interface StepCtx {
   state: ScanState
   /** Preferences; for AI engines `context` also carries the product memory block. */
   prefs: Preferences
+  /** The owner's own context, without memory (Codex prompts keep the two apart). */
+  ownerContext: string
+  /** Inline product memory summary ('' when none or not needed this step). */
+  memory: string
   llm: BackgroundLLM | null
   product: ProductRow | null
   /** Lazily loaded validator verdicts remembered for this repo. */
@@ -307,6 +317,7 @@ async function fail(scan: ScanRow, leaseId: string, message: string): Promise<nu
     leaseId,
   )
   if (!changed) return lostLease(scan)
+  await revokeScanTokens(scan.id)
   await logEvent(scan.id, `Scan failed: ${message.slice(0, 300)}`, 'error')
   return null
 }
@@ -323,6 +334,7 @@ async function complete(ctx: StepCtx, leaseId: string) {
     await lostLease(ctx.scan)
     return
   }
+  await revokeScanTokens(ctx.scan.id)
   await logEvent(ctx.scan.id, 'Done')
   // After the repo is understood, an onboarded user automatically gets their first report.
   if (ctx.scan.kind === 'understand') {
@@ -853,7 +865,7 @@ async function codexFallback(ctx: StepCtx, reason: string): Promise<StepResult> 
 async function runCodexTask<R extends CP.CodexRole>(
   ctx: StepCtx,
   role: R,
-  build: () => Promise<{ prompt: string; skills: string[] }>,
+  build: (memory: CP.TaskMemory) => Promise<{ prompt: string; skills: string[] }>,
   progress: number,
 ): Promise<{ done: CP.TaskOutput<R> } | { step: StepResult }> {
   const { scan, state } = ctx
@@ -862,11 +874,23 @@ async function runCodexTask<R extends CP.CodexRole>(
   const waitPhase = `codex_${role}_wait`
   try {
     if (scan.phase !== waitPhase) {
-      const { prompt, skills } = await build()
+      // A token for this task only: lets Codex pull more memory than fits inline, if its
+      // environment has internet access with our host allowlisted. Revoked when the task ends.
+      const issued = ctx.product
+        ? await issueAgentToken({ userId: ctx.user.id, repoId: ctx.repo.id, productId: ctx.product.id, scanId: scan.id, purpose: role, ttlMs: CODEX_TIMEOUT_MS + 5 * 60_000 }).catch(() => null)
+        : null
+      const { prompt, skills } = await build({ summary: ctx.memory, api: issued?.api ?? null })
       useSkills(ctx, skills)
       const branch = ctx.repo.default_branch || 'main'
-      const id = await client.createTask({ environmentId: state.codex.envId, branch, prompt, qaMode: true })
-      state.codex.tasks[role] = { id, startedAt: now() }
+      let id: string
+      try {
+        id = await client.createTask({ environmentId: state.codex.envId, branch, prompt, qaMode: true })
+      } catch (e) {
+        if (issued) await revokeAgentToken(issued.hash)
+        throw e
+      }
+      if (issued) await attachTask(issued.hash, id)
+      state.codex.tasks[role] = { id, startedAt: now(), tokenHash: issued?.hash }
       await recordCodexTasks(ctx, { [role]: 'running' } as Partial<Record<CP.CodexRole, string>>)
       await logEvent(scan.id, `Codex Cloud ${role} task started on ${branch}: ${taskUrl(id)}`)
       return { step: { phase: waitPhase, progress, delay: CODEX_POLL_SECONDS } }
@@ -875,12 +899,16 @@ async function runCodexTask<R extends CP.CodexRole>(
     if (!task) return { step: await codexFallback(ctx, `lost ${role} task id`) }
     const res = await client.getTask(task.id)
     if (res.status === 'pending' || res.status === 'in_progress' || res.status === 'unknown') {
-      if (now() - task.startedAt > CODEX_TIMEOUT_MS) return { step: await codexFallback(ctx, `${role} task timed out`) }
+      if (now() - task.startedAt > CODEX_TIMEOUT_MS) {
+        await finishTaskToken(ctx, role, undefined)
+        return { step: await codexFallback(ctx, `${role} task timed out`) }
+      }
       return { step: { phase: waitPhase, progress: Math.min(progress + 6, progress + Math.round((now() - task.startedAt) / 60_000)), delay: CODEX_POLL_SECONDS } }
     }
     await recordCodexTasks(ctx, { [role]: res.status } as Partial<Record<CP.CodexRole, string>>)
+    const out = res.status === 'completed' ? CP.parseTaskOutput(role, res.messages) : null
+    await finishTaskToken(ctx, role, out?.memoryApi)
     if (res.status !== 'completed') return { step: await codexFallback(ctx, `${role} task ${res.status}${res.error ? `: ${res.error}` : ''}`) }
-    const out = CP.parseTaskOutput(role, res.messages)
     if (!out) return { step: await codexFallback(ctx, `${role} task finished without valid JSON output`) }
     return { done: out }
   } catch (e) {
@@ -888,10 +916,27 @@ async function runCodexTask<R extends CP.CodexRole>(
   }
 }
 
+/**
+ * Revokes the task's memory token and records what it tells us about the environment:
+ * any request proves the agent phase reaches openscan; "unreachable" with no request
+ * means internet is off or our host is not allowlisted.
+ */
+async function finishTaskToken(ctx: StepCtx, role: CP.CodexRole, reported: 'used' | 'unreachable' | 'not_needed' | undefined) {
+  const hash = ctx.state.codex?.tasks[role]?.tokenHash
+  if (!hash) return
+  const uses = await revokeAgentToken(hash).catch(() => 0)
+  if (uses > 0) {
+    await logEvent(ctx.scan.id, `Codex ${role} task made ${uses} product memory API request(s)`)
+  } else if (reported === 'unreachable') {
+    await setCodexNet(ctx.user.id, ctx.repo.id, 'unreachable')
+    await logEvent(ctx.scan.id, `Codex ${role} task could not reach the product memory API (environment internet access is off or openscan is not allowlisted); it used the inline summary`, 'warn')
+  }
+}
+
 async function codexReconStep(ctx: StepCtx): Promise<StepResult> {
-  const r = await runCodexTask(ctx, 'recon', async () => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.prefs.context, openQuestions: await openQuestions(ctx), skippedQuestions: await skippedQuestions(ctx) }), 15)
+  const r = await runCodexTask(ctx, 'recon', async (memory) => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.ownerContext, openQuestions: await openQuestions(ctx), skippedQuestions: await skippedQuestions(ctx), memory }), 15)
   if ('step' in r) return r.step
-  const { questions, answers, ...profile } = r.done
+  const { questions, answers, memoryApi: _memoryApi, ...profile } = r.done
   await applyAnswers(ctx, answers)
   await addQuestions(ctx, questions.slice(0, 6))
   await run('UPDATE repositories SET profile_json = ?, understood_at = ?, updated_at = ? WHERE id = ?', JSON.stringify(profile), now(), now(), ctx.repo.id)
@@ -906,11 +951,12 @@ async function codexHuntStep(ctx: StepCtx, profile: RepoProfile | null): Promise
   const r = await runCodexTask(
     ctx,
     'hunt',
-    async () => {
+    async (memory) => {
       const already = await all<{ title: string }>('SELECT title FROM findings WHERE scan_id = ?', ctx.scan.id)
       return CP.huntPrompt({
         repo: ctx.repo.full_name,
-        prefs: ctx.prefs,
+        prefs: { ...ctx.prefs, context: ctx.ownerContext },
+        memory,
         profile,
         knownAnswers: await knownAnswers(ctx),
         openQuestions: await openQuestions(ctx),
@@ -950,10 +996,11 @@ async function codexValidateStep(ctx: StepCtx, profile: RepoProfile | null): Pro
   const r = await runCodexTask(
     ctx,
     'validate',
-    async () =>
+    async (memory) =>
       CP.validatePrompt({
         repo: ctx.repo.full_name,
-        prefs: ctx.prefs,
+        prefs: { ...ctx.prefs, context: ctx.ownerContext },
+        memory,
         profile,
         knownAnswers: await knownAnswers(ctx),
         findings: rows.map((f, index) => ({ index, severity: f.severity, title: f.title, file: f.file, line: f.line, description: f.description, threatModel: f.threat_model, trace: parseJson<string[]>(f.trace_json, []) })),

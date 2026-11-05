@@ -1,9 +1,9 @@
 import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Lede, Margin, Page, SectionHead, Title, plural } from '#/components/ui'
 import { ChatGPTConnect } from '#/components/ChatGPTConnect'
 import { PreferencesForm } from '#/components/PreferencesForm'
-import { disconnectChatGPT, getOnboarding, refreshCodexEnvironments, savePreferences } from '#/server-fns/app'
+import { checkCodexInternet, disconnectChatGPT, getOnboarding, refreshCodexEnvironments, savePreferences, testCodexInternet } from '#/server-fns/app'
 
 export const Route = createFileRoute('/settings')({
   loader: async () => {
@@ -21,6 +21,17 @@ function Settings() {
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
   const selected = data.repos.filter((r) => r.selected)
+  const checking = selected.some((r) => r.codexNet === 'checking')
+
+  // An internet check is a Codex task (1–3 min): poll until every check settles.
+  useEffect(() => {
+    if (!checking) return
+    const t = setInterval(async () => {
+      const res = await checkCodexInternet().catch(() => ({}) as Record<number, string>)
+      if (Object.values(res).some((v) => v !== 'checking')) await router.invalidate()
+    }, 10_000)
+    return () => clearInterval(t)
+  }, [checking, router])
 
   return (
     <Page user={data.user}>
@@ -85,11 +96,42 @@ function Settings() {
           </p>
           <ul className="mt-4 border-y border-rule">
             {selected.map((r) => (
-              <li key={r.id} className="flex items-baseline justify-between gap-4 border-t border-rule py-2.5 first:border-t-0">
-                <span className="text-[17px]">{r.fullName}</span>
-                <span className={`font-sans text-[12.5px] ${r.codexEnv ? 'text-ink' : 'text-muted'}`}>
-                  {r.codexEnv ? `● ${r.codexEnv}` : r.codexChecked ? '○ no environment' : '○ not checked yet'}
-                </span>
+              <li key={r.id} className="border-t border-rule py-2.5 first:border-t-0">
+                <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                  <span className="min-w-0 break-words text-[17px]">{r.fullName}</span>
+                  <span className={`font-sans text-[12.5px] ${r.codexEnv ? 'text-ink' : 'text-muted'}`}>
+                    {r.codexEnv ? `● ${r.codexEnv}` : r.codexChecked ? '○ no environment' : '○ not checked yet'}
+                  </span>
+                </div>
+                {r.codexEnv && (
+                  <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 font-sans text-[12.5px] text-muted">
+                    <span className={r.codexNet === 'reachable' ? 'text-ink' : undefined}>
+                      {r.codexNet === 'reachable'
+                        ? `Internet: reaches ${data.openscanHost}, so Codex can read full product memory`
+                        : r.codexNet === 'unreachable'
+                          ? `Internet: can't reach ${data.openscanHost}. Turn on agent internet access for this environment, allowlist ${data.openscanHost}, and allow GET. Until then Codex uses the inline memory summary.`
+                          : r.codexNet === 'checking'
+                            ? 'Internet: checking with a short Codex task (1–3 min)…'
+                            : 'Internet: not checked yet'}
+                    </span>
+                    {r.codexNet !== 'checking' && (
+                      <button
+                        className="underline underline-offset-4 hover:text-ink"
+                        disabled={busy !== null}
+                        onClick={async () => {
+                          setBusy(`net:${r.id}`)
+                          setNote(null)
+                          const res = await testCodexInternet({ data: { repoId: r.id } })
+                          if (!res.ok) setNote(res.reason)
+                          await router.invalidate()
+                          setBusy(null)
+                        }}
+                      >
+                        {busy === `net:${r.id}` ? 'Starting…' : r.codexNet ? 'Test again' : 'Test internet'}
+                      </button>
+                    )}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
