@@ -2,20 +2,12 @@
 import { aiMode } from '../env'
 import { first, now, run } from '../db'
 import { codexCredentials } from '../chatgpt'
-import { mockResponse } from '../ai/llm'
-import { createCodexClient, createMockCodexClient, pickEnvironment, type CodexClient } from './cloud'
+import { createCodexClient, pickEnvironment, type CodexClient } from './cloud'
 import type { UserRow } from '../types'
 
-let mockClient: CodexClient | undefined
-
-/** Codex Cloud client bound to the user's ChatGPT session (or the mock in AI_MODE=mock). */
+/** Codex Cloud client bound to the user's ChatGPT session. */
 export async function codexClientFor(user: Pick<UserRow, 'chatgpt_cookie_enc'>): Promise<CodexClient | null> {
-  const mode = aiMode()
-  if (mode === 'heuristic') return null
-  if (mode === 'mock') {
-    mockClient ??= createMockCodexClient((role, prompt) => mockResponse(`codex-${role}`, prompt))
-    return mockClient
-  }
+  if (aiMode() === 'heuristic') return null
   const creds = await codexCredentials(user)
   return creds ? createCodexClient(creds) : null
 }

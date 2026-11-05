@@ -1,6 +1,6 @@
 /** Pure helpers for product memory matching (unit-tested). */
 
-const STOP = new Set(['a', 'an', 'the', 'in', 'of', 'to', 'and', 'or', 'is', 'are', 'via', 'with', 'for', 'on', 'by', 'from', 'can', 'be', 'without', 'mock'])
+const STOP = new Set(['a', 'an', 'the', 'in', 'of', 'to', 'and', 'or', 'is', 'are', 'via', 'with', 'for', 'on', 'by', 'from', 'can', 'be', 'without'])
 
 export function titleTokens(title: string): Set<string> {
   return new Set(

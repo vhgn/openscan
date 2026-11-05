@@ -28,7 +28,7 @@ import { all, batch, first, now, parseJson, run, uid } from '../db'
 import { sha256Hex } from '../crypto'
 import { backgroundLLM, type BackgroundLLM } from '../chatgpt'
 import { fetchChangedFiles, fetchCodeScanningAlerts, fetchFile, fetchTree, getRepo, repoToken } from '../github/repos'
-import { askJson, MOCK_LLM } from '../ai/llm'
+import { askJson } from '../ai/llm'
 import type { z } from 'zod'
 import * as A from '../ai/agents'
 import { selectFiles, selectLockfiles, treeOverview } from './select-files'
@@ -232,7 +232,7 @@ interface StepResult {
 async function resolveEngine(ctx: StepCtx): Promise<BackgroundLLM | null> {
   const { scan, user } = ctx
   const mode = aiMode()
-  const llm = mode === 'mock' ? MOCK_LLM : mode === 'auto' ? await backgroundLLM(user).catch(() => null) : null
+  const llm = mode === 'auto' ? await backgroundLLM(user).catch(() => null) : null
   if (!scan.engine) {
     let engine = llm ? 'ai' : 'heuristic'
     if (llm) {
@@ -544,7 +544,6 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
             userContext: ctx.prefs.context,
           }),
           schema: A.readerOutput,
-          name: 'reader',
           effort: 'low',
         })
         state.notes = [...(state.notes ?? []), ...out.notes].slice(-60)
@@ -575,7 +574,6 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
             userContext: ctx.prefs.context,
           }),
           schema: A.profileOutput,
-          name: 'profile',
           effort: 'medium',
         })
         const { answers, ...rest } = out
@@ -647,7 +645,6 @@ async function securityStep(ctx: StepCtx): Promise<StepResult> {
             changed: state.changed,
           }),
           schema: A.reviewOutput,
-          name: 'review',
           effort: prefs.depth === 'triage' ? 'low' : 'medium',
         })
         await saveFindings(ctx, out.findings.map((f) => ({ ...f, source: 'ai-review' as const, skills: playbook.skills })))
@@ -995,7 +992,6 @@ async function validateStep(ctx: StepCtx, profile: RepoProfile | null): Promise<
           userContext: ctx.prefs.context,
         }),
         schema: A.validateOutput,
-          name: 'validate',
         effort: ctx.prefs.depth === 'triage' ? 'medium' : 'high',
       })
       await applyVerdict(ctx, f, out)
@@ -1031,7 +1027,6 @@ async function triage(ctx: StepCtx, profile: RepoProfile | null) {
         findings: rows.slice(0, 80).map((r, index) => ({ index, ...r })),
       }),
       schema: A.triageOutput,
-          name: 'triage',
       effort: prefs.depth === 'deep_poc' ? 'high' : 'medium',
     })
     const ops: Array<[string, Array<string | number | null>]> = []

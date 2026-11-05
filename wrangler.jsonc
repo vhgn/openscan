@@ -23,7 +23,6 @@
 		"GITHUB_APP_SLUG": "openscan",
 		// "auto" = use the user's ChatGPT session, fall back to heuristics when not linked.
 		// "heuristic" = never call an LLM (deterministic, offline-friendly demo mode).
-		// "mock" = scripted fake LLM to exercise the AI pipeline locally (never in production).
 		"AI_MODE": "auto",
 		// "1" enables /api/dev/login (fake GitHub user + public repos). Never enable in production.
 		"DEV_DEMO_LOGIN": "0"

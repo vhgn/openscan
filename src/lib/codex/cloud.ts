@@ -170,28 +170,3 @@ export function parseTaskDetails(d: TaskDetails): CodexTaskResult {
   const error = turn?.error ? [turn.error.code, turn.error.message].filter(Boolean).join(': ') || 'task failed' : null
   return { status, messages, error }
 }
-
-// ---------------------------------------------------------------- mock (AI_MODE=mock)
-
-/** In-memory fake used by AI_MODE=mock so the Codex path can be exercised locally. */
-export function createMockCodexClient(respond: (role: string, prompt: string) => unknown): CodexClient {
-  const tasks = new Map<string, { prompt: string; polls: number }>()
-  return {
-    async environmentsForRepo(fullName: string) {
-      return [{ id: `env_mock_${fullName.replace(/\W+/g, '_')}`, label: `${fullName} (mock)`, isPinned: true, taskCount: 0 }]
-    },
-    async createTask({ prompt }) {
-      const id = `task_mock_${crypto.randomUUID().slice(0, 8)}`
-      tasks.set(id, { prompt, polls: 0 })
-      return id
-    },
-    async getTask(id: string) {
-      const t = tasks.get(id)
-      if (!t) return { status: 'failed', messages: [], error: 'unknown mock task (worker restarted?)' }
-      t.polls++
-      if (t.polls < 2) return { status: 'in_progress', messages: [], error: null }
-      const role = /OPENSCAN-ROLE: (\w+)/.exec(t.prompt)?.[1] ?? ''
-      return { status: 'completed', messages: ['Working…', JSON.stringify(respond(role, t.prompt))], error: null }
-    },
-  }
-}

@@ -105,7 +105,6 @@ Then open:
 | --- | --- |
 | `npm run dev` | Vite + workerd on :3000 (pages, API, queue consumer, D1) |
 | `npm test` | Unit tests (Node's built-in test runner): file ranking, dependency parsing, heuristics, runtime advisories, skill registry/vendoring, PEM conversion, JSON extraction |
-| `AI_MODE=mock` in `.dev.vars` | Scripted fake LLM **and** fake Codex Cloud (tasks complete after two polls, about 1 minute), to exercise the whole agent path (recon → hunt → validate verdicts → questions → triage) without a ChatGPT account. Local testing only. |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run build` | Production build into `dist/` |
 | `npm run db:migrate:local` | Apply `migrations/*.sql` to the local D1 |
@@ -206,6 +205,43 @@ Finally, point the GitHub App's URLs at the deployed `APP_URL`. Queues and cron 
 
 The Codex client (`src/lib/codex/cloud.ts`) uses the same ChatGPT backend endpoints as `codex cloud` (`/wham/environments/by-repo/…`, `/wham/tasks`). These are mirrored from `openai/codex` and are **not a documented public API**. Any Codex error (session expired, task failed or timed out, output not matching the JSON contract) logs a warning and falls back to the `ai` engine for that scan.
 
+How one Codex task runs (`runCodexTask` in `src/lib/scanner/engine.ts`):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant E as Scan engine (phase codex_ROLE)
+    participant CH as chatgpt.ts
+    participant LWC as login-with-chatgpt handler
+    participant CX as Codex Cloud (/wham)
+    participant D as D1
+    participant Q as Queue
+
+    E->>CH: codexClientFor(user)
+    CH->>LWC: dangerouslyGetTokens (synthetic request with the stored session cookie)
+    LWC-->>CH: short-lived access token and account id, never stored
+    E->>E: build prompt for recon, hunt or validate: profile, known answers, memory skip list, changed files
+    E->>CX: POST /wham/tasks with environment, branch, prompt, Ask mode
+    CX-->>E: task id
+    E->>D: save task id in state and codex_tasks_json (linked from the report)
+    E->>Q: enqueue phase codex_ROLE_wait with a 30s delay
+
+    loop every 30s until the task finishes or 45 min pass
+        Q->>E: runStep
+        E->>CX: GET /wham/tasks/ID
+        CX-->>E: pending, in_progress, completed or failed
+        E->>Q: re-enqueue with a 30s delay
+    end
+
+    alt completed and the output passes the zod contract
+        E->>D: save findings, answers, questions or verdicts
+        E->>E: advance to the next phase
+    else failed, timed out, invalid JSON or no ChatGPT session
+        E->>D: engine becomes ai (or heuristic), file cursor reset, warning logged
+        E->>E: continue in read, review or validate on the direct engine
+    end
+```
+
 ### Products and unified memory (`src/lib/products.ts`)
 
 A **product** is a named group of repositories (for example `api` + `web` + `infra`). Each repo belongs to one product per user. Onboarding creates the first product. More can be created on `/products/new`, and **Scan product** scans every repo in it as one run (`scans.run_id`). Questions and answers are shared across the product, so the AI never asks the same thing per repo.
@@ -228,6 +264,55 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 | --- | --- | --- |
 | `understand` | `init → read* → profile` | Onboarding "AI reads your repo": builds a repo profile (stack, entry points, data stores, auth, sensitive areas) and raises or self-answers questions |
 | `security` | `init → deps → review* → validate* → triage` | The report. `deps` runs the deterministic signals: OSV, install scripts, Node/PHP/GitLab/Brotli runtime advisories, GitHub code-scanning import. `review` does batched AI code review (diff-first on push). `validate` sends each serious finding to an **independent validator** that confirms it, marks it needs-validation (which raises a question for you), or rejects it. `triage` ranks findings, writes *what matters* / *next actions*, and adds PoCs when `depth = deep_poc` |
+
+How one queue message is processed (`runStep`):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Q as Queue openscan-jobs
+    participant W as Worker queue handler
+    participant E as engine.runStep
+    participant D as D1
+    participant P as Product memory
+    participant X as Step (understand or security)
+
+    Q->>W: message with scanId (batch size 1)
+    W->>E: runStep(scanId)
+    E->>D: load scan, user and repo
+    alt scan missing, completed or failed
+        E-->>W: return without doing anything
+    end
+    E->>D: if queued, mark running
+    E->>D: load preferences
+    E->>P: find the repo's product, or create a default one
+    E->>E: resolveEngine picks codex, ai or heuristic (kept for the whole scan)
+    opt AI engine
+        E->>P: memoryContext (facts and sibling repo profiles)
+        E->>E: add the memory to the prompt context
+    end
+    E->>X: run the step for scan.phase
+    X-->>E: next phase, progress, optional delay
+    E->>D: save phase, progress, state_json and skills, reset attempts
+    alt next phase is done
+        E->>D: mark completed
+        E->>E: a finished understand scan starts the first security scan
+    else more work
+        E->>Q: enqueue the same scan (30s delay while polling Codex)
+    end
+    W->>Q: ack
+
+    Note over E,X: When a step throws
+    X--xE: error
+    E->>D: log the error as a scan event
+    alt third failed attempt
+        E->>D: mark failed
+    else
+        E->>D: attempts + 1
+        E->>Q: enqueue again after 10s x attempts
+    end
+    Note over W: If runStep itself crashes, the message is retried after 15s
+```
 
 Each state below is `scans.phase`. A self-loop is one more queue message for the same phase (the next file batch, the next two findings to validate, or another Codex poll). If a step throws, the same phase is retried after 10 s × attempt; after 3 attempts the scan is marked `failed`. The cron also re-enqueues any queued or running scan with no update in 10 minutes.
 
@@ -367,6 +452,13 @@ erDiagram
     SCANS |o--o{ QUESTIONS : "raises"
     REPOSITORIES |o--o{ QUESTIONS : "about"
     PRODUCTS |o--o{ QUESTIONS : "shared across"
+    USERS ||--o{ OAUTH_REQUESTS : "approves"
+    USERS ||--o{ OAUTH_CODES : "receives"
+    USERS ||--o{ OAUTH_GRANTS : "connects"
+    OAUTH_CLIENTS ||--o{ OAUTH_REQUESTS : "asks"
+    OAUTH_CLIENTS ||--o{ OAUTH_CODES : "redeems"
+    OAUTH_CLIENTS ||--o{ OAUTH_GRANTS : "holds"
+    OAUTH_GRANTS ||--o{ OAUTH_TOKENS : "issues"
 
     USERS {
         TEXT id PK
@@ -485,11 +577,133 @@ erDiagram
         TEXT key PK
         TEXT value
     }
+    OAUTH_CLIENTS {
+        TEXT id PK "client_id"
+        TEXT secret_hash "sha256, NULL for public clients"
+        TEXT redirect_uris "JSON array"
+        TEXT token_endpoint_auth_method
+        TEXT source "dcr, metadata_document"
+    }
+    OAUTH_REQUESTS {
+        TEXT id PK
+        TEXT user_id FK
+        TEXT client_id
+        TEXT params_json
+        INTEGER expires_at "10 min"
+    }
+    OAUTH_CODES {
+        TEXT id PK "sha256 of code"
+        TEXT client_id
+        TEXT user_id FK
+        TEXT code_challenge "PKCE S256"
+        TEXT scope
+        TEXT resource
+        INTEGER expires_at "5 min, single use"
+    }
+    OAUTH_GRANTS {
+        TEXT id PK
+        TEXT user_id FK
+        TEXT client_id
+        TEXT scope
+        TEXT resource "APP_URL/mcp"
+        INTEGER last_used_at
+    }
+    OAUTH_TOKENS {
+        TEXT id PK "sha256 of token"
+        TEXT grant_id FK
+        TEXT kind "access 1h, refresh 30d rotated"
+        TEXT scope
+        INTEGER expires_at
+    }
 ```
 
-`scans.product_id` and `questions.product_id` were added by `ALTER TABLE` without a foreign key; the link to `products` is kept in app code. `lwc_store` and `app_settings` stand alone.
+`scans.product_id` and `questions.product_id` were added by `ALTER TABLE` without a foreign key; the link to `products` is kept in app code. Likewise `client_id` in the `oauth_*` tables has no foreign key to `oauth_clients`. `lwc_store` and `app_settings` stand alone.
 
 `users` · `sessions` · `oauth_clients` · `oauth_requests` · `oauth_codes` · `oauth_grants` · `oauth_tokens` (MCP OAuth, `0005_mcp_oauth.sql`) · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` · `memory` · `preferences` · `scans` (status/phase/progress/state/summary/skills/Codex tasks/product/run) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
+
+### Identity, tokens and secrets
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as User browser
+    participant M as MCP client
+    participant W as Worker
+    participant GH as GitHub
+    participant D as D1
+    participant LWC as login-with-chatgpt (/api/chatgpt)
+    participant OAI as ChatGPT
+
+    rect rgb(235,240,255)
+    Note over U,GH: Sign in with the GitHub App
+    U->>W: GET /api/auth/github/login (optional ?next=)
+    W-->>U: redirect to GitHub, state cookie and next cookie
+    U->>GH: authorize
+    GH-->>U: redirect to /api/auth/github/callback with code and state
+    U->>W: callback (state must match the cookie)
+    W->>GH: exchange code for user token and refresh token
+    W->>GH: GET /user
+    W->>D: upsert user, store tokens AES-GCM encrypted
+    W->>GH: list installations and repositories
+    W->>D: installations, repositories, user links
+    W->>D: session row keyed by sha256 of the cookie token, 30 days
+    W-->>U: openscan_session cookie (HttpOnly, SameSite Lax), redirect to next or landing
+    end
+
+    rect rgb(235,255,240)
+    Note over U,GH: App install and webhooks
+    U->>GH: install the App on repositories
+    GH-->>U: redirect to /api/github/setup
+    U->>W: setup resyncs repositories
+    GH->>W: POST /api/github/webhook (HMAC verified): installation, installation_repositories, push
+    W->>D: keep installations and repositories in sync, start push scans
+    end
+
+    rect rgb(255,245,230)
+    Note over U,OAI: Link ChatGPT (the user's own plan, no API keys)
+    U->>LWC: device-code login
+    LWC->>OAI: OAuth
+    LWC->>D: SDK session in lwc_store
+    LWC-->>U: signed lwc_session cookie
+    U->>W: linkChatGPTSession server function
+    W->>D: users.chatgpt_cookie_enc = AES-GCM(lwc cookie)
+    end
+
+    rect rgb(245,235,255)
+    Note over W,OAI: Background work during a scan (user offline)
+    W->>D: decrypt chatgpt_cookie_enc
+    W->>LWC: synthetic request with that cookie, proxyFetch in-process
+    LWC->>OAI: responses (120 per minute limit)
+    W->>GH: App JWT (RS256), installation token cached until 5 min before expiry
+    W->>GH: read tree and files with the installation token
+    end
+
+    rect rgb(240,240,240)
+    Note over U,W: MCP client connects (OAuth 2.1)
+    M->>W: POST /mcp without a token
+    W-->>M: 401 with resource metadata URL
+    M->>W: GET /.well-known/oauth-protected-resource/mcp and oauth-authorization-server
+    M->>W: POST /oauth/register, or an https client_id metadata document
+    W->>D: oauth_clients
+    M->>U: open browser at /oauth/authorize (PKCE S256, resource APP_URL/mcp)
+    U->>W: GET /oauth/authorize
+    W-->>U: not signed in: GitHub login with next back to authorize
+    W->>D: oauth_requests
+    W-->>U: consent page
+    U->>W: approve
+    W->>D: oauth_codes (sha256, 5 min, single use)
+    W-->>M: redirect with code
+    M->>W: POST /oauth/token with code and PKCE verifier
+    W->>D: oauth_grants, oauth_tokens (sha256, access 1h, refresh 30d rotated)
+    M->>W: POST /mcp with Bearer token
+    W->>D: authenticateMcp: token, grant, user, resource check
+    W-->>M: tool results, scoped to the grant
+    end
+```
+
+- **Repository contents are always read with installation tokens.** User tokens are only used to discover which repositories a user can see, so background scans never need the user online.
+- **ChatGPT tokens never leave the SDK.** The Worker stores the encrypted signed SDK cookie and replays it in-process. Codex is the one exception: it gets a short-lived access token, and the refresh token stays redacted inside the SDK.
+- **Every secret stored for MCP OAuth is a sha256 hash** (client secrets, codes, tokens). The cron deletes expired codes, requests and tokens, and unused clients and grants.
 
 ### REST API (cookie-authenticated)
 
@@ -556,7 +770,7 @@ Security notes: tokens are bound to `APP_URL/mcp` (RFC 8707 `resource`); codes, 
 
 ### Known limitations
 
-- **Codex Cloud** uses undocumented ChatGPT backend endpoints, the same ones `codex cloud` uses, so they may change. Each user must create a Codex environment per repository at chatgpt.com/codex. The Codex path was verified end to end with `AI_MODE=mock` (scripted fake tasks), not against a real ChatGPT account.
+- **Codex Cloud** uses undocumented ChatGPT backend endpoints, the same ones `codex cloud` uses, so they may change. Each user must create a Codex environment per repository at chatgpt.com/codex. The Codex path has not been verified against a real ChatGPT account.
 
 - Only some of the end-to-end flow could be verified in the build sandbox. **Verified:** demo login, repo selection, preferences, the understand scan, the security scan with real OSV results, the dashboard, the report, the REST API, cron, the production build, and `wrangler deploy --dry-run`. The ChatGPT SDK worked up to OpenAI's device-code step. **Not verified (needs real accounts):** the ChatGPT device-login approval and AI-mode scans, GitHub App install/OAuth, and webhooks.
 - Large monorepos: only the top-ranked files are reviewed (30 to 50 per scan by depth). Truncated trees are noted in scan state.
