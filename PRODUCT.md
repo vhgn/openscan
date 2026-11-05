@@ -21,6 +21,8 @@ Visitors are **engineering team leads and CTOs**. They don't want a 400-row scan
 4. **After onboarding**, the user waits for the AI to finish reading (if it hasn't already), with visible progress.
 5. **Very minimalist dashboard:** previous scans, previous findings, and **questions** (raised by the AI during reading or by later scans) that it couldn't answer by itself.
 
+6. **Products.** Several repositories can be scanned as one **product**. The product has a **unified memory** so agents don't check the same things every time: shared facts and answers, files already reviewed at the same version, and validator verdicts on unchanged code.
+
 ## Landing page directions (`/design`)
 
 | Option | Direction | Status |

@@ -106,8 +106,10 @@ export function mockResponse(name: string, prompt: string): unknown {
     case 'codex-recon':
       return { ...(mockResponse('profile', prompt) as object), summary: 'Mock profile from a Codex Cloud recon task.', questions: [{ question: 'Which of these services are internet-facing?', rationale: 'Exposure drives severity.' }] }
     case 'codex-hunt': {
-      const r = mockResponse('review', '=== src/server.js ===') as { findings: unknown[] }
-      return { ...r, filesExamined: 42 }
+      const priority = [...prompt.matchAll(/high-signal files: ([^\n]+)/g)].flatMap((m) => m[1].split(', '))
+      const target = priority.find((p) => /\.(js|ts|py|go|rb|php)$/.test(p)) ?? 'src/server.js'
+      const r = mockResponse('review', `=== ${target} ===`) as { findings: unknown[] }
+      return { ...r, filesExamined: 42, reviewedPaths: priority.slice(0, 10) }
     }
     case 'codex-validate': {
       const n = (prompt.match(/"index":/g) ?? []).length

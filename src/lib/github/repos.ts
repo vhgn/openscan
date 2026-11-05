@@ -115,6 +115,8 @@ export interface TreeEntry {
   path: string
   type: 'blob' | 'tree'
   size?: number
+  /** Content hash: git blob sha (GitHub API) or sha256 (jsDelivr fallback). Used by product memory. */
+  sha?: string
 }
 
 /**
@@ -124,8 +126,8 @@ export interface TreeEntry {
 export async function publicTree(fullName: string, branch: string): Promise<TreeEntry[] | null> {
   const res = await fetch(`https://data.jsdelivr.com/v1/packages/gh/${fullName}@${encodeURIComponent(branch)}?structure=flat`)
   if (!res.ok) return null
-  const data = (await res.json()) as { files?: Array<{ name: string; size: number }> }
-  return (data.files ?? []).map((f) => ({ path: f.name.replace(/^\//, ''), type: 'blob' as const, size: f.size }))
+  const data = (await res.json()) as { files?: Array<{ name: string; size: number; hash?: string }> }
+  return (data.files ?? []).map((f) => ({ path: f.name.replace(/^\//, ''), type: 'blob' as const, size: f.size, sha: f.hash }))
 }
 
 export async function fetchTree(repo: RepoRow, token: string | null): Promise<{ sha: string; entries: TreeEntry[]; truncated: boolean }> {

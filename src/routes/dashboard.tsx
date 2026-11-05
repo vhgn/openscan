@@ -2,7 +2,7 @@ import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { Empty, SeverityBadge, StatusDot, TopBar, timeAgo } from '#/components/ui'
 import { QuestionCard } from '#/components/QuestionCard'
-import { getDashboard, refreshCodexEnvironments, startScan } from '#/server-fns/app'
+import { getDashboard, refreshCodexEnvironments, scanProduct, startScan } from '#/server-fns/app'
 
 export const Route = createFileRoute('/dashboard')({
   loader: () => getDashboard(),
@@ -71,6 +71,42 @@ function Dashboard() {
             >
               {busy ? 'Starting…' : 'Scan now'}
             </button>
+          </div>
+        </section>
+
+        <section>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide">Products</h2>
+            <Link to="/products/$productId" params={{ productId: 'new' }} className="muted text-xs underline">
+              + New product
+            </Link>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {data.products.map((p) => (
+              <div key={p.id} className="app-card flex items-start justify-between gap-3 p-4">
+                <div className="min-w-0">
+                  <Link to="/products/$productId" params={{ productId: p.id }} className="font-semibold hover:underline">
+                    {p.name}
+                  </Link>
+                  <p className="muted text-xs">
+                    {p.repos} repositor{p.repos === 1 ? 'y' : 'ies'} · memory: {p.memory.facts} facts, {p.memory.reviewed} files, {p.memory.verdicts} verdicts
+                    {p.memory.saved > 0 && <> · {p.memory.saved} re-checks avoided</>}
+                  </p>
+                </div>
+                <button
+                  className="btn btn-ghost whitespace-nowrap py-1 text-xs"
+                  disabled={busy || p.repos === 0}
+                  onClick={async () => {
+                    setBusy(true)
+                    await scanProduct({ data: { productId: p.id } })
+                    setBusy(false)
+                    await router.invalidate()
+                  }}
+                >
+                  Scan product
+                </button>
+              </div>
+            ))}
           </div>
         </section>
 

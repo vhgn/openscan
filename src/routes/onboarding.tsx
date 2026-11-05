@@ -79,6 +79,7 @@ function Onboarding() {
 function ReposStep({ data }: { data: OnboardingData }) {
   const router = useRouter()
   const [selected, setSelected] = useState<number[]>(data.repos.filter((r) => r.selected).map((r) => r.id))
+  const [productName, setProductName] = useState(data.productName ?? data.installations[0]?.account_login ?? 'My product')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const toggle = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]))
@@ -88,6 +89,11 @@ function ReposStep({ data }: { data: OnboardingData }) {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Which repositories should we watch?</h1>
         <p className="muted mt-1">The GitHub App only sees repositories you grant it. Pick the ones you want reviewed.</p>
+        <label className="mt-5 block max-w-md">
+          <span className="text-sm font-semibold">Product name</span>
+          <span className="muted block text-xs">Repositories in one product are reviewed together and share one memory (facts, answers, already-reviewed code).</span>
+          <input className="input mt-2" value={productName} onChange={(e) => setProductName(e.target.value)} placeholder="e.g. Payments platform" />
+        </label>
 
         {data.repos.length === 0 ? (
           <div className="app-card mt-6 p-8 text-center">
@@ -123,7 +129,7 @@ function ReposStep({ data }: { data: OnboardingData }) {
               setBusy(true)
               setError(null)
               try {
-                await saveRepoSelection({ data: { repoIds: selected } })
+                await saveRepoSelection({ data: { repoIds: selected, productName: productName.trim() || undefined } })
                 await router.navigate({ to: '/onboarding', search: {} })
                 await router.invalidate()
               } catch (e) {

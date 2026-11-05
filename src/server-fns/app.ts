@@ -12,6 +12,20 @@ import { createScan, loadPreferences } from '#/lib/scanner/engine'
 import { listFindings, listQuestions, listScans, scanDetail } from '#/lib/queries'
 import { codexClientFor, codexEnvironmentFor } from '#/lib/codex/runtime'
 import { environmentsSettingsUrl } from '#/lib/codex/cloud'
+import {
+  deleteProduct,
+  ensureDefaultProduct,
+  forgetMemory,
+  getProduct,
+  listMemory,
+  listProducts,
+  memoryStats,
+  productForRepo,
+  productRepoIds,
+  rememberFacts,
+  saveProduct,
+} from '#/lib/products'
+import { uid } from '#/lib/db'
 import { isDemoLoginEnabled, str } from '#/lib/env'
 import { preferencesSchema, type OnboardingStep, type UserRow } from '#/lib/types'
 
@@ -124,6 +138,7 @@ export const getOnboarding = createServerFn({ method: 'GET' }).handler(async () 
     questions: await listQuestions(user.id, ['open', 'auto_answered', 'answered'], selected),
     preferences: await loadPreferences(user.id),
     hasPreferences: Boolean(await first('SELECT 1 FROM preferences WHERE user_id = ?', user.id)),
+    productName: (await listProducts(user.id))[0]?.name ?? null,
   }
 })
 export type OnboardingData = Awaited<ReturnType<typeof getOnboarding>>
@@ -135,9 +150,11 @@ export const refreshRepos = createServerFn({ method: 'POST' }).handler(async () 
 })
 
 export const saveRepoSelection = createServerFn({ method: 'POST' })
-  .validator(z.object({ repoIds: z.array(z.number().int()).min(1).max(50) }))
+  .validator(z.object({ repoIds: z.array(z.number().int()).min(1).max(50), productName: z.string().trim().min(1).max(80).optional() }))
   .handler(async ({ data }) => {
     const user = await requireUser()
+    // Selected repositories form (or join) the user's product so they share one memory.
+    await ensureDefaultProduct(user.id, data.productName ?? 'My product', data.repoIds)
     await batch([
       ['UPDATE user_repositories SET selected = 0 WHERE user_id = ?', [user.id]],
       ...data.repoIds.map((id): [string, Array<string | number | null>] => ['UPDATE user_repositories SET selected = 1 WHERE user_id = ? AND repo_id = ?', [user.id, id]]),
@@ -213,6 +230,10 @@ export const answerQuestion = createServerFn({ method: 'POST' })
       data.id,
       user.id,
     )
+    // Owner answers become product memory facts, visible to every agent in the product.
+    const q = await first<{ question: string; repo_id: number | null; product_id: string | null }>('SELECT question, repo_id, product_id FROM questions WHERE id = ?', data.id)
+    const productId = q?.product_id ?? (q?.repo_id ? (await productForRepo(user.id, q.repo_id))?.id : null)
+    if (q && productId) await rememberFacts(productId, null, null, [{ text: `Owner: ${q.question} → ${data.answer}`, evidence: 'answered by the owner' }])
     return { ok: true }
   })
 
@@ -234,6 +255,9 @@ export const getDashboard = createServerFn({ method: 'GET' }).handler(async () =
     user: publicUser(user),
     repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at) })),
     codexEnvironmentsUrl: environmentsSettingsUrl(),
+    products: await Promise.all(
+      (await listProducts(user.id)).map(async (p) => ({ id: p.id, name: p.name, repos: p.repos, memory: await memoryStats(p.id) })),
+    ),
     scans: await listScans(user.id, 30),
     findings: await listFindings(user.id, { limit: 50 }),
     questions: await listQuestions(user.id, ['open']),
@@ -279,3 +303,68 @@ export const refreshCodexEnvironments = createServerFn({ method: 'POST' }).handl
   for (const r of repos) if (await codexEnvironmentFor(user.id, r, client, true).catch(() => null)) found++
   return { ok: true as const, found, total: repos.length }
 })
+
+// ------------------------------------------------------------------ products & memory
+
+export const scanProduct = createServerFn({ method: 'POST' })
+  .validator(z.object({ productId: z.string() }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    const product = await getProduct(user.id, data.productId)
+    if (!product) throw new Error('Product not found')
+    const runId = uid()
+    const ids: string[] = []
+    for (const repoId of await productRepoIds(product.id)) ids.push(await createScan(user.id, repoId, 'security', 'manual', {}, runId))
+    return { runId, scanIds: ids }
+  })
+
+export const getProductPage = createServerFn({ method: 'GET' })
+  .validator(z.object({ id: z.string() }))
+  .handler(async ({ data }) => {
+    const user = await authed()
+    const isNew = data.id === 'new'
+    const product = isNew ? null : await getProduct(user.id, data.id)
+    if (!isNew && !product) throw redirect({ to: '/dashboard' })
+    const members = product ? await productRepoIds(product.id) : []
+    const repos = await listUserRepos(user.id)
+    const owners = new Map<number, string>()
+    for (const p of await listProducts(user.id)) for (const r of await productRepoIds(p.id)) owners.set(r, p.name)
+    const memory = product ? await listMemory(product.id) : []
+    return {
+      user: publicUser(user),
+      product: product ? { id: product.id, name: product.name, description: product.description } : null,
+      repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, member: members.includes(r.id), otherProduct: members.includes(r.id) ? null : (owners.get(r.id) ?? null) })),
+      stats: product ? await memoryStats(product.id) : { facts: 0, reviewed: 0, verdicts: 0, saved: 0 },
+      memory: memory.map((m) => ({ id: m.id, kind: m.kind, repo: repos.find((r) => r.id === m.repo_id)?.full_name ?? null, key: m.key, content: m.content, evidence: m.evidence, hits: m.hits, updatedAt: m.updated_at })),
+    }
+  })
+export type ProductPageData = Awaited<ReturnType<typeof getProductPage>>
+
+export const saveProductFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ id: z.string().optional(), name: z.string().trim().min(1).max(80), description: z.string().max(500).optional(), repoIds: z.array(z.number().int()).max(100) }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    if (data.id && !(await getProduct(user.id, data.id))) throw new Error('Product not found')
+    const linked = (await listUserRepos(user.id)).map((r) => r.id)
+    const repoIds = data.repoIds.filter((id) => linked.includes(id))
+    // Repos in a product are scanned, so make sure they are selected.
+    for (const id of repoIds) await run('UPDATE user_repositories SET selected = 1 WHERE user_id = ? AND repo_id = ?', user.id, id)
+    return { id: await saveProduct(user.id, { id: data.id, name: data.name, description: data.description ?? null, repoIds }) }
+  })
+
+export const deleteProductFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ id: z.string() }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    await deleteProduct(user.id, data.id)
+    return { ok: true }
+  })
+
+export const forgetMemoryFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ productId: z.string(), memoryId: z.string().optional(), kind: z.enum(['fact', 'reviewed', 'verdict']).optional() }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    if (!(await getProduct(user.id, data.productId))) throw new Error('Product not found')
+    await forgetMemory(data.productId, data.memoryId, data.kind)
+    return { ok: true }
+  })

@@ -132,6 +132,11 @@ function ScanPage() {
                 </ol>
               </div>
             </div>
+            {summary.memory && summary.memory.skippedFiles + summary.memory.reusedVerdicts > 0 && (
+              <p className="muted mt-4 text-xs">
+                Product memory: skipped {summary.memory.skippedFiles} file(s) already reviewed at this version and reused {summary.memory.reusedVerdicts} earlier verdict(s).
+              </p>
+            )}
             {summary.needsValidation && summary.needsValidation.length > 0 && (
               <div className="mt-5 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
                 <p className="text-xs font-semibold uppercase tracking-wide">Needs your input (no severity until answered)</p>

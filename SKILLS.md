@@ -38,6 +38,10 @@ understand:     init ──▶ read* ──▶ profile
 - **Secrets-only skill:** the sheet left this cell empty on purpose (no trustworthy first-party skill). openscan's pattern rules and the supply-chain auditor cover secrets for now.
 - **Executable helpers** (Python/Node scripts in the upstream repos) are **not vendored or run**. openscan runs in a Worker; equivalent logic is re-implemented in `src/lib/scanner/runtime-advisories.ts` and `heuristics.ts` and covered by unit tests (`tests/skills.test.ts`).
 
+### Prior runs (product memory)
+
+Cloudflare's security-audit skill treats prior runs carefully. A prior *confirmed* record carries over only when its source is unchanged. A prior *rejected* record suppresses only the unchanged failed claim, never coverage of the area. openscan's product memory follows the same rule: verdicts and reviewed-file skips are keyed to the file's git blob hash, so any change sends the code back through review and validation. See README → *Products and unified memory*.
+
 ## Validation verdicts in the UI
 
 | Badge | Meaning | Effect |

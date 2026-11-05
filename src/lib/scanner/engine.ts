@@ -41,6 +41,20 @@ import { codexClientFor, codexEnvironmentFor } from '../codex/runtime'
 import { environmentsSettingsUrl, taskUrl } from '../codex/cloud'
 import * as CP from '../codex/prompts'
 import {
+  ensureDefaultProduct,
+  memoryContext,
+  memoryHit,
+  priorVerdict,
+  productForRepo,
+  rememberFacts,
+  rememberReviewed,
+  rememberVerdict,
+  unchangedReviewed,
+  verdictMemory,
+  type ProductRow,
+  type VerdictMemory,
+} from '../products'
+import {
   SEVERITIES,
   defaultPreferences,
   preferencesSchema,
@@ -82,13 +96,19 @@ interface ScanState {
   validateTotal?: number
   /** Skill ids applied so far in this scan. */
   skills?: string[]
+  /** Blob hashes of candidate files (product memory). */
+  hashes?: Record<string, string>
+  /** Files skipped because product memory says they were reviewed at this exact version. */
+  memorySkipped?: string[]
+  /** Findings whose verdict was reused from product memory. */
+  memoryVerdicts?: number
   /** Codex Cloud runtime state. */
   codex?: { envId: string; envLabel: string | null; tasks: Partial<Record<CP.CodexRole, { id: string; startedAt: number; status?: string }>> }
 }
 
 // ---------------------------------------------------------------- public API
 
-export async function createScan(userId: string, repoId: number, kind: ScanKind, trigger: string, initialState: Partial<ScanState> = {}): Promise<string> {
+export async function createScan(userId: string, repoId: number, kind: ScanKind, trigger: string, initialState: Partial<ScanState> = {}, runId: string | null = null): Promise<string> {
   const active = await first<{ id: string }>(
     `SELECT id FROM scans WHERE user_id = ? AND repo_id = ? AND kind = ? AND status IN ('queued','running')`,
     userId,
@@ -98,8 +118,8 @@ export async function createScan(userId: string, repoId: number, kind: ScanKind,
   if (active) return active.id
   const id = uid()
   await run(
-    `INSERT INTO scans (id, user_id, repo_id, kind, trigger, status, phase, progress, state_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, ?, ?)`,
+    `INSERT INTO scans (id, user_id, repo_id, kind, trigger, status, phase, progress, state_json, created_at, updated_at, product_id, run_id)
+     VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, ?, ?, ?, ?)`,
     id,
     userId,
     repoId,
@@ -108,6 +128,8 @@ export async function createScan(userId: string, repoId: number, kind: ScanKind,
     JSON.stringify(initialState),
     now(),
     now(),
+    (await productForRepo(userId, repoId))?.id ?? null,
+    runId,
   )
   await logEvent(id, kind === 'understand' ? 'Queued: AI will read the repository' : `Queued security scan (${trigger})`)
   await enqueue(id)
@@ -149,10 +171,20 @@ export async function runStep(scanId: string): Promise<void> {
     state: parseJson<ScanState>(scan.state_json, {}),
     prefs: await loadPreferences(user.id),
     llm: null,
+    product: (await productForRepo(user.id, repo.id)) ?? null,
+  }
+  if (!ctx.product) {
+    // Every repo lives in a product so memory always has a home.
+    await ensureDefaultProduct(user.id, repo.full_name.split('/')[0], [repo.id])
+    ctx.product = await productForRepo(user.id, repo.id)
   }
 
   try {
     ctx.llm = await resolveEngine(ctx)
+    if (ctx.llm && ctx.product) {
+      const mem = await memoryContext(ctx.product.id, repo.id, { skipPaths: ctx.state.memorySkipped })
+      if (mem) ctx.prefs = { ...ctx.prefs, context: [ctx.prefs.context, mem].filter(Boolean).join('\n\n') }
+    }
     const result = scan.kind === 'understand' ? await understandStep(ctx) : await securityStep(ctx)
     await run(
       `UPDATE scans SET phase = ?, progress = ?, state_json = ?, skills_json = ?, attempts = 0, updated_at = ? WHERE id = ?`,
@@ -182,8 +214,12 @@ interface StepCtx {
   user: UserRow
   repo: RepoRow
   state: ScanState
+  /** Preferences; for AI engines `context` also carries the product memory block. */
   prefs: Preferences
   llm: BackgroundLLM | null
+  product: ProductRow | null
+  /** Lazily loaded validator verdicts remembered for this repo. */
+  verdicts?: VerdictMemory[]
 }
 
 interface StepResult {
@@ -316,7 +352,28 @@ async function initTree(ctx: StepCtx, maxFiles: number, boost: string[] = []) {
       await logEvent(ctx.scan.id, `Differential review: ${ctx.state.changed.length} file(s) changed in ${ctx.state.diff.base.slice(0, 7)}..${ctx.state.diff.head.slice(0, 7)} are reviewed first`)
     }
   }
-  ctx.state.files = selectFiles(tree.entries, { maxFiles, maxBytesPerFile: MAX_FILE_CHARS, boost, focus: ctx.prefs.focus, priority: ctx.state.changed })
+  // Product memory: skip files already reviewed at this exact blob hash (security scans only).
+  let candidates = tree.entries
+  const hashes = Object.fromEntries(
+    selectFiles(tree.entries, { maxFiles: 400, maxBytesPerFile: MAX_FILE_CHARS, focus: ctx.prefs.focus })
+      .map((p) => [p, tree.entries.find((e) => e.path === p)?.sha ?? ''])
+      .filter(([, h]) => h),
+  ) as Record<string, string>
+  ctx.state.hashes = hashes
+  ctx.state.memorySkipped = []
+  if (ctx.scan.kind === 'security' && ctx.product) {
+    const mem = await unchangedReviewed(ctx.product.id, ctx.repo.id, hashes, ctx.prefs)
+    const changed = new Set(ctx.state.changed ?? [])
+    const skip = [...mem.paths].filter((p) => !changed.has(p))
+    if (skip.length) {
+      const skipSet = new Set(skip)
+      candidates = tree.entries.filter((e) => !skipSet.has(e.path))
+      ctx.state.memorySkipped = skip.slice(0, 200)
+      await memoryHit(mem.ids)
+      await logEvent(ctx.scan.id, `Product memory: skipping ${skip.length} file(s) already reviewed at their current version`)
+    }
+  }
+  ctx.state.files = selectFiles(candidates, { maxFiles, maxBytesPerFile: MAX_FILE_CHARS, boost, focus: ctx.prefs.focus, priority: ctx.state.changed })
   ctx.state.lockfiles = selectLockfiles(tree.entries)
   ctx.state.runtimeFiles = selectRuntimeFiles(tree.entries)
   ctx.state.cursor = 0
@@ -332,20 +389,26 @@ async function initTree(ctx: StepCtx, maxFiles: number, boost: string[] = []) {
 
 // ----- questions
 
-async function openQuestions(userId: string, repoId: number) {
+/** Questions are shared across the product: an answer for one repo serves all of them. */
+const Q_SCOPE = `user_id = ? AND (repo_id = ? OR (product_id IS NOT NULL AND product_id = ?))`
+
+async function openQuestions(ctx: StepCtx) {
   return all<{ id: string; question: string }>(
-    `SELECT id, question FROM questions WHERE user_id = ? AND repo_id = ? AND status = 'open' ORDER BY created_at LIMIT 20`,
-    userId,
-    repoId,
+    `SELECT id, question FROM questions WHERE ${Q_SCOPE} AND status = 'open' ORDER BY created_at LIMIT 20`,
+    ctx.user.id,
+    ctx.repo.id,
+    ctx.product?.id ?? null,
   )
 }
 
-async function knownAnswers(userId: string, repoId: number) {
+async function knownAnswers(ctx: StepCtx) {
   return all<{ question: string; answer: string }>(
-    `SELECT question, answer FROM questions WHERE user_id = ? AND (repo_id = ? OR repo_id IS NULL)
+    `SELECT question, answer FROM questions WHERE (${Q_SCOPE} OR (user_id = ? AND repo_id IS NULL))
      AND status IN ('answered','auto_answered') AND answer IS NOT NULL ORDER BY answered_at DESC LIMIT 30`,
-    userId,
-    repoId,
+    ctx.user.id,
+    ctx.repo.id,
+    ctx.product?.id ?? null,
+    ctx.user.id,
   )
 }
 
@@ -353,9 +416,9 @@ const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/
 
 async function addQuestions(ctx: StepCtx, qs: Array<{ question: string; rationale: string; answer?: string; evidence?: string }>) {
   if (!qs.length) return
-  const existing = await all<{ question: string }>('SELECT question FROM questions WHERE user_id = ? AND repo_id = ?', ctx.user.id, ctx.repo.id)
+  const existing = await all<{ question: string }>(`SELECT question FROM questions WHERE ${Q_SCOPE}`, ctx.user.id, ctx.repo.id, ctx.product?.id ?? null)
   const seen = new Set(existing.map((q) => norm(q.question)))
-  const openCount = (await openQuestions(ctx.user.id, ctx.repo.id)).length
+  const openCount = (await openQuestions(ctx)).length
   let budget = Math.max(0, 10 - openCount)
   const ops: Array<[string, Array<string | number | null>]> = []
   for (const q of qs) {
@@ -364,9 +427,9 @@ async function addQuestions(ctx: StepCtx, qs: Array<{ question: string; rational
     if (!q.answer && budget-- <= 0) continue
     seen.add(key)
     ops.push([
-      `INSERT INTO questions (id, user_id, repo_id, scan_id, question, rationale, status, answer, answer_source, evidence, created_at, answered_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [uid(), ctx.user.id, ctx.repo.id, ctx.scan.id, q.question, q.rationale, q.answer ? 'auto_answered' : 'open', q.answer ?? null, q.answer ? 'ai' : null, q.evidence ?? null, now(), q.answer ? now() : null],
+      `INSERT INTO questions (id, user_id, repo_id, scan_id, question, rationale, status, answer, answer_source, evidence, created_at, answered_at, product_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [uid(), ctx.user.id, ctx.repo.id, ctx.scan.id, q.question, q.rationale, q.answer ? 'auto_answered' : 'open', q.answer ?? null, q.answer ? 'ai' : null, q.evidence ?? null, now(), q.answer ? now() : null, ctx.product?.id ?? null],
     ])
   }
   await batch(ops)
@@ -395,21 +458,56 @@ async function saveFindings(ctx: StepCtx, drafts: FindingDraft[]) {
   const existing = new Set(
     (await all<{ fingerprint: string }>('SELECT fingerprint FROM findings WHERE scan_id = ?', ctx.scan.id)).map((f) => f.fingerprint),
   )
+  if (ctx.product && !ctx.verdicts) ctx.verdicts = await verdictMemory(ctx.product.id, ctx.repo.id)
+  const reused: string[] = []
   for (const f of drafts) {
     const fp = await sha256Hex(`${ctx.repo.id}|${f.category}|${norm(f.title)}|${f.file ?? ''}`)
     if (existing.has(fp)) continue
     existing.add(fp)
+    // Product memory: the same claim on byte-identical code keeps its earlier verdict (no re-validation).
+    const prior = ctx.verdicts && f.source && ['ai-review', 'heuristic', 'code-scanning'].includes(f.source) ? priorVerdict(ctx.verdicts, { title: f.title, file: f.file ?? null, category: f.category }, f.file ? (ctx.state.hashes?.[f.file] ?? null) : null) : null
+    if (prior) reused.push(prior.id)
+    const verdict = prior && (prior.verdict === 'rejected' || prior.verdict === 'confirmed') ? prior.verdict : null
+    const verification = verdict ? `Product memory: ${verdict} in an earlier scan on identical code.\n${prior!.reasoning}` : null
     ops.push([
-      `INSERT INTO findings (id, scan_id, repo_id, user_id, severity, category, title, file, line, description, impact, recommendation, poc, confidence, fingerprint, created_at, trace_json, threat_model, source, skills_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO findings (id, scan_id, repo_id, user_id, severity, category, title, file, line, description, impact, recommendation, poc, confidence, fingerprint, created_at, trace_json, threat_model, source, skills_json, verdict, verification, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        uid(), ctx.scan.id, ctx.repo.id, ctx.user.id, f.severity, f.category, f.title, f.file ?? null, f.line ?? null, f.description,
+        uid(), ctx.scan.id, ctx.repo.id, ctx.user.id, verdict === 'confirmed' ? prior!.severity : f.severity, f.category, f.title, f.file ?? null, f.line ?? null, f.description,
         f.impact ?? null, f.recommendation ?? null, f.poc ?? null, f.confidence ?? 'medium', fp, now(),
         f.trace?.length ? JSON.stringify(f.trace) : null, f.threatModel ?? null, f.source ?? null, f.skills?.length ? JSON.stringify(f.skills) : null,
+        verdict, verification, verdict === 'rejected' ? 'dismissed' : 'open',
       ],
     ])
   }
   await batch(ops)
+  if (reused.length) {
+    ctx.state.memoryVerdicts = (ctx.state.memoryVerdicts ?? 0) + reused.length
+    await memoryHit(reused)
+    await logEvent(ctx.scan.id, `Product memory: reused ${reused.length} earlier verdict(s) for unchanged code`)
+  }
+}
+
+/** Records reviewed files (with blob hash) so later scans of the product skip them while unchanged. */
+async function rememberBatch(ctx: StepCtx, paths: string[], findings: Array<{ file?: string | null }>) {
+  if (!ctx.product || !paths.length) return
+  await rememberReviewed(
+    ctx.product.id,
+    ctx.repo.id,
+    ctx.scan.id,
+    paths.map((path) => ({ path, hash: ctx.state.hashes?.[path] ?? null, findings: findings.filter((f) => f.file === path).length })),
+  )
+}
+
+/** Durable facts worth sharing with every agent in the product. */
+function profileFacts(repo: string, profile: RepoProfile, notes: string[]) {
+  const facts: Array<{ text: string; evidence?: string }> = []
+  if (profile.auth && profile.auth !== 'Unknown') facts.push({ text: `${repo} auth: ${profile.auth}` })
+  if (profile.deployment && profile.deployment !== 'Unknown') facts.push({ text: `${repo} deployment: ${profile.deployment}` })
+  if (profile.dataStores.length && profile.dataStores[0] !== 'Unknown') facts.push({ text: `${repo} data stores: ${profile.dataStores.join(', ')}` })
+  if (profile.externalServices.length) facts.push({ text: `${repo} external services: ${profile.externalServices.join(', ')}` })
+  for (const n of [...profile.notes, ...notes.filter((x) => x.startsWith('UNENFORCED:'))]) facts.push({ text: `${repo}: ${n}` })
+  return facts
 }
 
 // ---------------------------------------------------------------- understand
@@ -441,7 +539,7 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
             repo: ctx.repo.full_name,
             overview: state.overview ?? '',
             notes: state.notes ?? [],
-            openQuestions: await openQuestions(ctx.user.id, ctx.repo.id),
+            openQuestions: await openQuestions(ctx),
             files,
             userContext: ctx.prefs.context,
           }),
@@ -473,7 +571,7 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
             repo: ctx.repo.full_name,
             overview: state.overview ?? '',
             notes: state.notes ?? [],
-            openQuestions: await openQuestions(ctx.user.id, ctx.repo.id),
+            openQuestions: await openQuestions(ctx),
             userContext: ctx.prefs.context,
           }),
           schema: A.profileOutput,
@@ -487,7 +585,8 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
         profile = heuristicProfile(state.files ?? [], state.manifests ?? {}, state.readme)
       }
       await run('UPDATE repositories SET profile_json = ?, understood_at = ?, updated_at = ? WHERE id = ?', JSON.stringify(profile), now(), now(), ctx.repo.id)
-      const open = (await openQuestions(ctx.user.id, ctx.repo.id)).length
+      if (ctx.product) await rememberFacts(ctx.product.id, ctx.repo.id, scan.id, profileFacts(ctx.repo.full_name, profile, state.notes ?? []))
+      const open = (await openQuestions(ctx)).length
       await run(
         'UPDATE scans SET summary_json = ? WHERE id = ?',
         JSON.stringify({ profile, filesReviewed: state.filesReviewed ?? 0, openQuestions: open }),
@@ -538,8 +637,8 @@ async function securityStep(ctx: StepCtx): Promise<StepResult> {
           prompt: A.reviewPrompt({
             repo: ctx.repo.full_name,
             profile,
-            knownAnswers: await knownAnswers(ctx.user.id, ctx.repo.id),
-            openQuestions: await openQuestions(ctx.user.id, ctx.repo.id),
+            knownAnswers: await knownAnswers(ctx),
+            openQuestions: await openQuestions(ctx),
             files: files.map((f) => ({
               path: f.path,
               content: `${hints.filter((h) => h.file === f.path).map((h) => `// static-analyzer hint (verify, may be false positive): ${h.title} @ line ${h.line}`).join('\n')}\n${f.content}`,
@@ -552,12 +651,14 @@ async function securityStep(ctx: StepCtx): Promise<StepResult> {
           effort: prefs.depth === 'triage' ? 'low' : 'medium',
         })
         await saveFindings(ctx, out.findings.map((f) => ({ ...f, source: 'ai-review' as const, skills: playbook.skills })))
+        await rememberBatch(ctx, files.map((f) => f.path), out.findings)
         await applyAnswers(ctx, out.answers)
         await addQuestions(ctx, out.questions.slice(0, 2))
         await logEvent(scan.id, `Reviewed ${files.map((f) => f.path).join(', ')} → ${out.findings.length} finding(s)`)
       } else {
         for (const h of hints) if (h.skills?.length) useSkills(ctx, h.skills)
         await saveFindings(ctx, hints.map((h) => ({ ...h, source: 'heuristic' as const })))
+        await rememberBatch(ctx, files.map((f) => f.path), hints)
         await logEvent(scan.id, `Pattern-scanned ${files.map((f) => f.path).join(', ')} → ${hints.length} finding(s)`)
       }
       const total = state.files?.length || 1
@@ -731,13 +832,14 @@ async function runCodexTask<R extends CP.CodexRole>(
 }
 
 async function codexReconStep(ctx: StepCtx): Promise<StepResult> {
-  const r = await runCodexTask(ctx, 'recon', async () => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.prefs.context, openQuestions: await openQuestions(ctx.user.id, ctx.repo.id) }), 15)
+  const r = await runCodexTask(ctx, 'recon', async () => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.prefs.context, openQuestions: await openQuestions(ctx) }), 15)
   if ('step' in r) return r.step
   const { questions, answers, ...profile } = r.done
   await applyAnswers(ctx, answers)
   await addQuestions(ctx, questions.slice(0, 6))
   await run('UPDATE repositories SET profile_json = ?, understood_at = ?, updated_at = ? WHERE id = ?', JSON.stringify(profile), now(), now(), ctx.repo.id)
-  const open = (await openQuestions(ctx.user.id, ctx.repo.id)).length
+  if (ctx.product) await rememberFacts(ctx.product.id, ctx.repo.id, ctx.scan.id, profileFacts(ctx.repo.full_name, profile, []))
+  const open = (await openQuestions(ctx)).length
   await run('UPDATE scans SET summary_json = ? WHERE id = ?', JSON.stringify({ profile, filesReviewed: 0, openQuestions: open }), ctx.scan.id)
   await logEvent(ctx.scan.id, `Codex built the repository profile (${profile.stack.join(', ') || 'stack unknown'}); ${open} question(s) still need you`)
   return { phase: 'done', progress: 100 }
@@ -753,8 +855,8 @@ async function codexHuntStep(ctx: StepCtx, profile: RepoProfile | null): Promise
         repo: ctx.repo.full_name,
         prefs: ctx.prefs,
         profile,
-        knownAnswers: await knownAnswers(ctx.user.id, ctx.repo.id),
-        openQuestions: await openQuestions(ctx.user.id, ctx.repo.id),
+        knownAnswers: await knownAnswers(ctx),
+        openQuestions: await openQuestions(ctx),
         alreadyFound: already.map((a) => a.title),
         changed: ctx.state.changed,
         priorityFiles: ctx.state.files ?? [],
@@ -766,6 +868,7 @@ async function codexHuntStep(ctx: StepCtx, profile: RepoProfile | null): Promise
   const pb = huntPlaybook({ differential: Boolean(ctx.state.changed?.length) })
   ctx.state.filesReviewed = r.done.filesExamined
   await saveFindings(ctx, r.done.findings.map((f) => ({ ...f, source: 'ai-review' as const, skills: pb.skills })))
+  await rememberBatch(ctx, r.done.reviewedPaths.filter((p) => ctx.state.hashes?.[p]), r.done.findings)
   await applyAnswers(ctx, r.done.answers)
   await addQuestions(ctx, r.done.questions.slice(0, 3))
   await logEvent(ctx.scan.id, `Codex hunt examined ${r.done.filesExamined} file(s) → ${r.done.findings.length} finding(s)`)
@@ -794,7 +897,7 @@ async function codexValidateStep(ctx: StepCtx, profile: RepoProfile | null): Pro
         repo: ctx.repo.full_name,
         prefs: ctx.prefs,
         profile,
-        knownAnswers: await knownAnswers(ctx.user.id, ctx.repo.id),
+        knownAnswers: await knownAnswers(ctx),
         findings: rows.map((f, index) => ({ index, severity: f.severity, title: f.title, file: f.file, line: f.line, description: f.description, threatModel: f.threat_model, trace: parseJson<string[]>(f.trace_json, []) })),
       }),
     78,
@@ -861,6 +964,10 @@ async function applyVerdict(ctx: StepCtx, f: { id: string; title: string }, out:
     )
   }
   await logEvent(ctx.scan.id, `Validator: "${f.title}" → ${out.decision}${out.decision === 'confirmed' ? ` (${out.severity})` : ''}`)
+  if (ctx.product && out.decision !== 'needs_validation') {
+    const row = await first<{ fingerprint: string; title: string; file: string | null; category: string; severity: string }>('SELECT fingerprint, title, file, category, severity FROM findings WHERE id = ?', id)
+    if (row) await rememberVerdict(ctx.product.id, ctx.repo.id, ctx.scan.id, row, out.decision, verification, row.file ? (ctx.state.hashes?.[row.file] ?? null) : null)
+  }
 }
 
 async function validateStep(ctx: StepCtx, profile: RepoProfile | null): Promise<StepResult> {
@@ -882,7 +989,7 @@ async function validateStep(ctx: StepCtx, profile: RepoProfile | null): Promise<
         prompt: A.validatePrompt({
           repo: ctx.repo.full_name,
           profile,
-          knownAnswers: await knownAnswers(ctx.user.id, ctx.repo.id),
+          knownAnswers: await knownAnswers(ctx),
           finding: { severity: f.severity, category: f.category, title: f.title, file: f.file, line: f.line, description: f.description, threatModel: f.threat_model, trace, impact: f.impact, recommendation: f.recommendation },
           files,
           userContext: ctx.prefs.context,
@@ -920,7 +1027,7 @@ async function triage(ctx: StepCtx, profile: RepoProfile | null) {
       prompt: A.triagePrompt({
         repo: ctx.repo.full_name,
         profile,
-        knownAnswers: await knownAnswers(ctx.user.id, ctx.repo.id),
+        knownAnswers: await knownAnswers(ctx),
         findings: rows.slice(0, 80).map((r, index) => ({ index, ...r })),
       }),
       schema: A.triageOutput,
@@ -981,6 +1088,7 @@ async function triage(ctx: StepCtx, profile: RepoProfile | null) {
   summary.needsValidation = nv.map((r) => ({ title: r.title, missingFact: /^Missing fact: (.+)$/m.exec(r.verification ?? '')?.[1] ?? '' }))
   summary.filesReviewed = state.filesReviewed ?? 0
   summary.dependenciesChecked = state.depsChecked ?? 0
+  summary.memory = { skippedFiles: state.memorySkipped?.length ?? 0, reusedVerdicts: state.memoryVerdicts ?? 0 }
   await run('UPDATE scans SET summary_json = ?, skills_json = ? WHERE id = ?', JSON.stringify(summary), JSON.stringify(state.skills ?? []), scan.id)
 }
 

@@ -12,7 +12,10 @@ import type { Preferences, RepoProfile } from '../types'
 export type CodexRole = 'recon' | 'hunt' | 'validate'
 
 export const reconTaskOutput = A.profileOutput.extend({ questions: z.array(A.newQuestion) })
-export const huntTaskOutput = A.reviewOutput.extend({ filesExamined: z.number().int().describe('How many files you actually read') })
+export const huntTaskOutput = A.reviewOutput.extend({
+  filesExamined: z.number().int().describe('How many files you actually read'),
+  reviewedPaths: z.array(z.string()).describe('Repository-relative paths you fully reviewed (they are remembered so future scans can skip them while unchanged)'),
+})
 export const validateTaskOutput = z.object({ verdicts: z.array(A.validateOutput.extend({ index: z.number().int() })) })
 
 const CONTRACT = { recon: reconTaskOutput, hunt: huntTaskOutput, validate: validateTaskOutput } as const
