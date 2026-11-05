@@ -43,7 +43,7 @@ import { acquireLease, releaseLease, STALL_MS, STALLED_SCANS_SQL } from './lease
 import { codexClientFor, codexEnvironmentFor, codexRunnerOf } from '../codex/runtime'
 import { readOnlyRepoToken, revokeInstallationToken } from '../github/app'
 import { decrypt, encrypt } from '../crypto'
-import { environmentsSettingsUrl, taskUrl } from '../codex/cloud'
+import { environmentsSettingsUrl, isCodexBlocked, taskUrl } from '../codex/cloud'
 import * as CP from '../codex/prompts'
 import { attachTask, issueAgentToken, revokeAgentToken, revokeScanTokens, setCodexNet } from '../codex/agent-tokens'
 import {
@@ -426,9 +426,18 @@ async function resolveEngine(ctx: StepCtx): Promise<BackgroundLLM | null> {
     let engine = llm ? 'ai' : 'heuristic'
     if (llm) {
       const client = await codexClientFor(user).catch(() => null)
-      const env = client ? await codexEnvironmentFor(user.id, ctx.repo, client).catch(() => null) : null
-      const runner = client && !env ? codexRunnerOf(user) : null
-      if (env) {
+      let blocked = false
+      const env = client
+        ? await codexEnvironmentFor(user.id, ctx.repo, client).catch((e) => {
+            blocked = isCodexBlocked(e)
+            return null
+          })
+        : null
+      // A blocked lookup means every Codex request would be blocked, the runner's included.
+      const runner = client && !env && !blocked ? codexRunnerOf(user) : null
+      if (blocked) {
+        await logEvent(scan.id, `Codex Cloud: chatgpt.com blocked openscan's server (bot protection), so Codex tasks can't run; using direct ChatGPT review`, 'warn')
+      } else if (env) {
         engine = 'codex'
         ctx.state.codex = { envId: env.id, envLabel: env.label, tasks: {} }
         await logEvent(scan.id, `Using Codex Cloud tasks in environment "${env.label ?? env.id}" on the user's ChatGPT plan`)

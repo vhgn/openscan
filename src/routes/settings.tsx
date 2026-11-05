@@ -31,6 +31,7 @@ function Settings() {
   const [note, setNote] = useState<string | null>(null)
   const selected = data.repos.filter((r) => r.selected)
   const checking = selected.some((r) => r.codexNet === 'checking')
+  const blocked = data.codexBlockedAt !== null
 
   // An internet check is a Codex task (1–3 min): poll until every check settles.
   useEffect(() => {
@@ -103,22 +104,30 @@ function Settings() {
           <p className="mt-4 text-[17px] leading-[1.6] text-ink-3">
             With a Codex environment, agents work as Codex tasks with the whole repository checked out. Without one, they use the runner environment below if you pick one, or read files through ChatGPT.
           </p>
+          {blocked && (
+            <p className="mt-4 border-l-2 border-rule pl-4 text-[17px] leading-[1.6]" role="status">
+              chatgpt.com is blocking openscan&rsquo;s server from Codex Cloud: its bot protection answers with a 403 page before the request reaches the Codex API (last seen{' '}
+              {new Date(data.codexBlockedAt!).toLocaleString()}). Until that changes, scans use direct ChatGPT review on your plan. &ldquo;Check again&rdquo; retries.
+            </p>
+          )}
           <ul className="mt-4 border-y border-rule">
             {selected.map((r) => (
               <li key={r.id} className="border-t border-rule py-2.5 first:border-t-0">
                 <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                   <span className="min-w-0 break-words text-[17px]">{r.fullName}</span>
                   <span className={`font-sans text-[12.5px] ${r.codexEnv ? 'text-ink' : 'text-muted'}`}>
-                    {r.codexEnv
-                      ? `● ${r.codexEnv}`
-                      : data.codexRunner
-                        ? `◐ runner: ${data.codexRunner.label ?? data.codexRunner.id}`
-                        : r.codexChecked
-                          ? '○ no environment'
-                          : '○ not checked yet'}
+                    {blocked
+                      ? '○ Codex unreachable'
+                      : r.codexEnv
+                        ? `● ${r.codexEnv}`
+                        : data.codexRunner
+                          ? `◐ runner: ${data.codexRunner.label ?? data.codexRunner.id}`
+                          : r.codexChecked
+                            ? '○ no environment'
+                            : '○ not checked yet'}
                   </span>
                 </div>
-                {r.codexEnv && (
+                {r.codexEnv && !blocked && (
                   <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 font-sans text-[12.5px] text-muted">
                     <span className={r.codexNet === 'reachable' ? 'text-ink' : undefined}>
                       {r.codexNet === 'reachable'
@@ -167,7 +176,7 @@ function Settings() {
             </button>
             {note && <span>{note}</span>}
           </p>
-          <RunnerPicker runner={data.codexRunner} />
+          {!blocked && <RunnerPicker runner={data.codexRunner} />}
         </>
       )}
 

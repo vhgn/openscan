@@ -59,7 +59,7 @@ The customer asked for three things, and each one shaped the product:
 - **Without ChatGPT**, the **heuristic engine** runs: real deterministic rules, OSV.dev and known-CVE checks, no AI. That is the "mocked scan" the brief allowed. Nothing returns made-up AI output.
 - **Verified end to end:** demo login through onboarding, both scan kinds with real OSV results, dashboard, report, REST API, cron, production build.
 - **Verified manually** by the owner across different repositories and accounts: ChatGPT device-login approval and AI scans, GitHub App install and sign-in, and webhooks.
-- **Not verified:** the Codex Cloud path (a per-repo environment or the runner environment), which still needs a real Codex environment.
+- **Not verified:** the Codex Cloud path (a per-repo environment or the runner environment). In production, chatgpt.com's bot protection has refused the server's Codex requests with a 403 page; openscan now reports that in Settings and the scan log and uses direct ChatGPT review.
 
 ## What we cut, and why
 

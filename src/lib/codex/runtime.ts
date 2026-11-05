@@ -7,11 +7,28 @@ import type { UserRow } from '../types'
 import { attachTask, issueAgentToken, revokeAgentToken, setCodexNet, type AgentTokenRow } from './agent-tokens'
 import { probePrompt, settleProbe, type NetStatus } from './memory-api'
 
-/** Codex Cloud client bound to the user's ChatGPT session. */
-export async function codexClientFor(user: Pick<UserRow, 'chatgpt_cookie_enc'>): Promise<CodexClient | null> {
+/**
+ * Codex Cloud client bound to the user's ChatGPT session. With the user's id it also
+ * records whether chatgpt.com let the request through (users.codex_blocked_at), so
+ * Settings can say so instead of failing silently.
+ */
+export async function codexClientFor(user: Pick<UserRow, 'chatgpt_cookie_enc'> & { id?: string; codex_blocked_at?: number | null }): Promise<CodexClient | null> {
   if (aiMode() === 'heuristic') return null
   const creds = await codexCredentials(user)
-  return creds ? createCodexClient(creds) : null
+  if (!creds) return null
+  const id = user.id
+  let blockedAt = user.codex_blocked_at ?? null
+  return createCodexClient(creds, fetch, {
+    onBlocked: async () => {
+      blockedAt = now()
+      if (id) await run('UPDATE users SET codex_blocked_at = ? WHERE id = ?', blockedAt, id).catch(() => undefined)
+    },
+    onOk: async () => {
+      if (!blockedAt || !id) return
+      blockedAt = null
+      await run('UPDATE users SET codex_blocked_at = NULL WHERE id = ?', id).catch(() => undefined)
+    },
+  })
 }
 
 const RECHECK_MS = 6 * 60 * 60 * 1000

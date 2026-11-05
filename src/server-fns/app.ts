@@ -11,7 +11,7 @@ import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
 import { cancelScan, createScan, loadPreferences, productIdForRepo, startProductScan } from '#/lib/scanner/engine'
 import { listFindings, listProductScans, listQuestions, listScans, scanDetail, scanProgress } from '#/lib/queries'
 import { codexClientFor, codexEnvironmentFor, codexRunnerOf, openscanHost, setCodexRunner, settleInternetProbes, startInternetProbe } from '#/lib/codex/runtime'
-import { environmentsSettingsUrl } from '#/lib/codex/cloud'
+import { CODEX_BLOCKED_MESSAGE, environmentsSettingsUrl, isCodexBlocked } from '#/lib/codex/cloud'
 import {
   deleteProduct,
   ensureDefaultProduct,
@@ -100,6 +100,7 @@ async function onboardingData(user: UserRow) {
     repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, private: Boolean(r.private), language: r.language, description: r.description, selected: Boolean(r.selected), understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at), codexNet: r.codex_net, codexNetAt: r.codex_net_at })),
     codexEnvironmentsUrl: environmentsSettingsUrl(),
     codexRunner: codexRunnerOf(user),
+    codexBlockedAt: user.codex_blocked_at ?? null,
     openscanHost: openscanHost(),
     reading: scans.map((s) => ({ ...s, repo: repos.find((r) => r.id === s.repo_id)?.full_name ?? '' })),
     questions: await listQuestions(user.id, ['open', 'auto_answered', 'answered'], selected),
@@ -240,6 +241,7 @@ async function dashboardData(user: UserRow) {
     repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at) })),
     codexEnvironmentsUrl: environmentsSettingsUrl(),
     codexRunner: codexRunnerOf(user),
+    codexBlocked: Boolean(user.codex_blocked_at),
     products: await Promise.all(
       (await listProducts(user.id)).map(async (p) => ({ id: p.id, name: p.name, repos: p.repos, pushRepos: p.push_repos, memory: await memoryStats(p.id) })),
     ),
@@ -321,7 +323,14 @@ export const refreshCodexEnvironments = createServerFn({ method: 'POST' }).handl
   if (!client) return { ok: false as const, reason: 'Link ChatGPT first' }
   const repos = (await listUserRepos(user.id)).filter((r) => r.selected)
   let found = 0
-  for (const r of repos) if (await codexEnvironmentFor(user.id, r, client, true).catch(() => null)) found++
+  for (const r of repos) {
+    try {
+      if (await codexEnvironmentFor(user.id, r, client, true)) found++
+    } catch (e) {
+      // Every repo would be refused the same way; stop and say why instead of reporting "0 found".
+      if (isCodexBlocked(e)) return { ok: false as const, reason: CODEX_BLOCKED_MESSAGE }
+    }
+  }
   return { ok: true as const, found, total: repos.length }
 })
 
@@ -334,7 +343,8 @@ export const listCodexEnvironments = createServerFn({ method: 'POST' }).handler(
     const envs = await client.listEnvironments()
     return { ok: true as const, envs: envs.map((e) => ({ id: e.id, label: e.label })) }
   } catch (e) {
-    return { ok: false as const, reason: `Could not list Codex environments: ${String(e).slice(0, 160)}` }
+    if (isCodexBlocked(e)) return { ok: false as const, reason: CODEX_BLOCKED_MESSAGE }
+    return { ok: false as const, reason: `Could not list Codex environments: ${e instanceof Error ? e.message.slice(0, 160) : 'unknown error'}` }
   }
 })
 

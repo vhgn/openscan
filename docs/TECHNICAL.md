@@ -168,7 +168,11 @@ Finally, point the GitHub App's URLs at the deployed `APP_URL`. Queues and cron 
 | `ai` | ChatGPT linked, no Codex environment and no runner (or a Codex task failed) | The Worker sends ranked file batches to ChatGPT through the login-with-chatgpt proxy. |
 | `heuristic` | ChatGPT not linked, or `AI_MODE=heuristic` | Deterministic rules plus OSV and runtime advisories only. |
 
-The Codex client (`src/lib/codex/cloud.ts`) uses the same ChatGPT backend endpoints as `codex cloud` (`/wham/environments`, `/wham/environments/by-repo/…`, `/wham/tasks`). These are mirrored from `openai/codex` and are **not a documented public API**. Any Codex error (session expired, task failed or timed out, output not matching the JSON contract) logs a warning and falls back to the `ai` engine for that scan.
+The Codex client (`src/lib/codex/cloud.ts`) uses the same ChatGPT backend endpoints as `codex cloud` (`/wham/environments`, `/wham/environments/by-repo/…`, `/wham/tasks`). These are mirrored from `openai/codex` and are **not a documented public API**.
+
+chatgpt.com's bot protection can refuse these requests from openscan's server: it answers with an HTML 403 page before the request reaches the Codex API (seen in production on `GET /wham/environments`). The client reports that as a *blocked* error (`CODEX_BLOCKED_MESSAGE`, never the page itself) and records it in `users.codex_blocked_at`; any later successful Codex request clears it. While blocked, scans log a warning and use the `ai` engine (the runner too, since it uses the same API), Settings says so and hides the runner picker and internet test, and "Check again" retries. openscan does not try to get around the block.
+
+Any Codex error (session expired, task failed or timed out, output not matching the JSON contract) logs a warning and falls back to the `ai` engine for that scan.
 
 #### Runner environment (repositories without their own environment)
 
@@ -575,7 +579,7 @@ erDiagram
 
 `scans.product_id`, `scans.product_scan_id` and `questions.product_id` were added by `ALTER TABLE` without a foreign key; the link to `products` is kept in app code. `lwc_store` and `app_settings` stand alone.
 
-`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `users.codex_runner_*` (runner environment) · `products` · `product_repositories` (`scan_on_push`) · `product_scans` (one review of a product: trigger, pushed repo and commit) · `memory` · `preferences` · `scans` (one repository job: status/phase/progress/state/summary/skills/Codex tasks/product/product scan) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
+`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `users.codex_runner_*` (runner environment), `users.codex_blocked_at` · `products` · `product_repositories` (`scan_on_push`) · `product_scans` (one review of a product: trigger, pushed repo and commit) · `memory` · `preferences` · `scans` (one repository job: status/phase/progress/state/summary/skills/Codex tasks/product/product scan) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
 
 ### Identity, tokens and secrets
 

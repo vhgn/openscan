@@ -42,6 +42,8 @@ export interface UserRow {
   codex_runner_env_id?: string | null
   codex_runner_env_label?: string | null
   codex_runner_branch?: string | null
+  /** Last time chatgpt.com's bot protection refused a Codex Cloud request from the server; cleared by any success. */
+  codex_blocked_at?: number | null
 }
 
 export interface RepoRow {

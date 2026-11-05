@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createCodexClient, parseTaskDetails, pickEnvironment, taskUrl, CodexCloudError } from '../src/lib/codex/cloud.ts'
+import { createCodexClient, parseTaskDetails, pickEnvironment, taskUrl, CodexCloudError, CODEX_BLOCKED_MESSAGE, isCodexBlocked, looksLikeHtml } from '../src/lib/codex/cloud.ts'
 import { CHECKOUT_DIR, checkoutFailure, cloneUrl, huntPrompt, parseTaskOutput, reconPrompt, redact, safeRepoName, validatePrompt } from '../src/lib/codex/prompts.ts'
 import { defaultPreferences } from '../src/lib/types.ts'
 
@@ -152,4 +152,32 @@ test('checkout helpers: clone URL, failure report, redaction, safe names', () =>
   assert.ok(!safeRepoName('acme/repo;rm -rf /'))
   assert.ok(!safeRepoName('acme/$(id)'))
   assert.ok(!safeRepoName('acme'))
+})
+
+test('an HTML 403 from chatgpt.com is reported as blocked, without the page', async () => {
+  const page = '<html> <head> <meta name="viewport" content="width=device-width, initial-scale=1" /> <style global>body{}</style></head></html>'
+  const events: string[] = []
+  const fetchImpl = async (url: string) =>
+    url.endsWith('/wham/environments')
+      ? new Response(page, { status: 403, headers: { 'content-type': 'text/html; charset=UTF-8' } })
+      : url.includes('/by-repo/')
+        ? new Response(page, { status: 403 })
+        : new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
+  const c = createCodexClient({ accessToken: 't', accountId: 'a' }, fetchImpl, { onBlocked: () => void events.push('blocked'), onOk: () => void events.push('ok') })
+
+  await assert.rejects(c.listEnvironments(), (e: unknown) => isCodexBlocked(e) && (e as Error).message === CODEX_BLOCKED_MESSAGE && !(e as Error).message.includes('<html'))
+  // A blocked by-repo lookup must not read as "no environment".
+  await assert.rejects(c.environmentsForRepo('acme/api'), (e: unknown) => isCodexBlocked(e))
+  assert.deepEqual(await c.getTask('task_1').then(() => 'done'), 'done')
+  assert.deepEqual(events, ['blocked', 'blocked', 'ok'])
+})
+
+test('other HTML errors are not "blocked" and never echo the page', async () => {
+  const c = createCodexClient({ accessToken: 't', accountId: 'a' }, async () => new Response('<html>bad gateway</html>', { status: 502 }))
+  await assert.rejects(c.listEnvironments(), (e: unknown) => e instanceof CodexCloudError && !e.blocked && e.status === 502 && !e.message.includes('<html'))
+  // A JSON 403 (e.g. plan without Codex) keeps the API's own message.
+  const j = createCodexClient({ accessToken: 't', accountId: 'a' }, async () => new Response('{"detail":"Codex not enabled"}', { status: 403, headers: { 'content-type': 'application/json' } }))
+  await assert.rejects(j.listEnvironments(), (e: unknown) => e instanceof CodexCloudError && !e.blocked && e.message.includes('Codex not enabled'))
+  assert.ok(looksLikeHtml('  <!DOCTYPE html>', null))
+  assert.ok(!looksLikeHtml('{"a":1}', 'application/json'))
 })

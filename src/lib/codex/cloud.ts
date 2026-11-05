@@ -36,9 +36,29 @@ export class CodexCloudError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /** chatgpt.com's bot protection refused the request before it reached the Codex API. */
+    readonly blocked = false,
   ) {
     super(message)
   }
+}
+
+export const CODEX_BLOCKED_MESSAGE =
+  "chatgpt.com blocked openscan's server from Codex Cloud (HTTP 403 from its bot protection, before the request reached the Codex API)"
+
+export function isCodexBlocked(e: unknown): boolean {
+  return e instanceof CodexCloudError && e.blocked
+}
+
+/** A web page instead of JSON: an edge or bot-protection response, not the Codex API. Pure. */
+export function looksLikeHtml(text: string, contentType: string | null): boolean {
+  return /text\/html/i.test(contentType ?? '') || /^\s*</.test(text)
+}
+
+/** Hooks that let the caller remember whether Codex Cloud is reachable from the server. */
+export interface CodexClientHooks {
+  onBlocked?: () => void | Promise<void>
+  onOk?: () => void | Promise<void>
 }
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
@@ -51,7 +71,7 @@ export function environmentsSettingsUrl(): string {
   return 'https://chatgpt.com/codex/settings/environments'
 }
 
-export function createCodexClient(creds: CodexCredentials, fetchImpl: FetchLike = fetch) {
+export function createCodexClient(creds: CodexCredentials, fetchImpl: FetchLike = fetch, hooks: CodexClientHooks = {}) {
   async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
     const res = await fetchImpl(`${CODEX_BASE_URL}${path}`, {
       method,
@@ -65,7 +85,16 @@ export function createCodexClient(creds: CodexCredentials, fetchImpl: FetchLike 
       body: body ? JSON.stringify(body) : undefined,
     })
     const text = await res.text()
-    if (!res.ok) throw new CodexCloudError(`Codex Cloud ${method} ${path} → ${res.status}: ${text.slice(0, 200)}`, res.status)
+    if (!res.ok) {
+      const html = looksLikeHtml(text, res.headers.get('content-type'))
+      if (res.status === 403 && (html || res.headers.get('cf-mitigated'))) {
+        await hooks.onBlocked?.()
+        throw new CodexCloudError(CODEX_BLOCKED_MESSAGE, res.status, true)
+      }
+      // Never surface a raw HTML page (it is an edge error, not an API message).
+      throw new CodexCloudError(`Codex Cloud ${method} ${path} → ${res.status}${html ? ' (web page instead of an API response)' : `: ${text.slice(0, 200)}`}`, res.status)
+    }
+    await hooks.onOk?.()
     try {
       return JSON.parse(text) as T
     } catch {
