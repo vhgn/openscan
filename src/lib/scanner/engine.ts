@@ -676,6 +676,7 @@ async function applyAnswers(ctx: StepCtx, answers: Array<{ questionId: string; a
 async function saveFindings(ctx: StepCtx, drafts: FindingDraft[]) {
   if (!drafts.length) return
   const ops: Array<[string, Array<string | number | null>]> = []
+  // Skips known fingerprints early; the unique index (scan_id, fingerprint) is what guarantees no duplicates.
   const existing = new Set(
     (await all<{ fingerprint: string }>('SELECT fingerprint FROM findings WHERE scan_id = ?', ctx.scan.id)).map((f) => f.fingerprint),
   )
@@ -692,7 +693,8 @@ async function saveFindings(ctx: StepCtx, drafts: FindingDraft[]) {
     const verification = verdict ? `Product memory: ${verdict} in an earlier scan on identical code.\n${prior!.reasoning}` : null
     ops.push([
       `INSERT INTO findings (id, scan_id, repo_id, user_id, severity, category, title, file, line, description, impact, recommendation, poc, confidence, fingerprint, created_at, trace_json, threat_model, source, skills_json, verdict, verification, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (scan_id, fingerprint) DO NOTHING`,
       [
         uid(), ctx.scan.id, ctx.repo.id, ctx.user.id, verdict === 'confirmed' ? prior!.severity : f.severity, f.category, f.title, f.file ?? null, f.line ?? null, f.description,
         f.impact ?? null, f.recommendation ?? null, f.poc ?? null, f.confidence ?? 'medium', fp, now(),
@@ -779,7 +781,8 @@ async function carryFindings(ctx: StepCtx, paths: string[], reviewedBy: Record<s
   await batch(
     carry.map((r) => [
       `INSERT INTO findings (id, scan_id, repo_id, user_id, severity, category, title, file, line, description, impact, recommendation, poc, confidence, fingerprint, created_at, trace_json, threat_model, source, skills_json, verdict, verification, status, carried_from)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)
+       ON CONFLICT (scan_id, fingerprint) DO NOTHING`,
       [
         uid(), ctx.scan.id, ctx.repo.id, ctx.user.id, r.severity, r.category, r.title, r.file, r.line, r.description,
         r.impact, r.recommendation, r.poc, r.confidence, r.fingerprint, r.created_at,

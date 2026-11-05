@@ -289,7 +289,7 @@ sequenceDiagram
 
 Each state below is `scans.phase`. A self-loop is one more queue message for the same phase (the next file batch, the next two findings to validate, or another Codex poll). If a step throws (including while it is being set up: loading the user, preferences or product), the same phase is retried after 10 s × attempt; after 3 attempts the scan is marked `failed`. The cron also re-enqueues any queued or running scan with no update in 10 minutes, unless a step still holds a live lease. Each such revival uses an attempt from the same budget, so a step that keeps killing its worker fails instead of looping. The exception is a scan polling a Codex task that, as of its last poll, is still `pending` or `in_progress` and within the 45-minute Codex timeout: it is re-enqueued without using an attempt (`reviveStalledScans`, `waitingOnLiveCodexTask` in `engine.ts`).
 
-Each step runs under a lease (`scans.lease_id`, `lease_until`, see `src/lib/scanner/lease.ts`), so a duplicate queue message or a cron revival never runs the same step twice at once. The lease lasts 15 minutes, the longest a queue consumer may run. The step's writes are fenced on `lease_id`, and the lease is released before the next step is enqueued. A worker that dies leaves an expired lease, which the next delivery takes over.
+Each step runs under a lease (`scans.lease_id`, `lease_until`, see `src/lib/scanner/lease.ts`), so a duplicate queue message or a cron revival never runs the same step twice at once. The lease lasts 15 minutes, the longest a queue consumer may run. The step's writes are fenced on `lease_id`, and the lease is released before the next step is enqueued. A worker that dies leaves an expired lease, which the next delivery takes over. A worker that outlives its lease can still overlap the one that took over until it reaches a fenced write, so findings are also deduplicated by the database: a unique index on `findings(scan_id, fingerprint)` (migration `0012`) and `INSERT … ON CONFLICT DO NOTHING` store each finding once per scan.
 
 When a repository is removed from the GitHub App (or the app is uninstalled), its `repositories` row is kept and marked `removed_at`, and users are unlinked from it. Deleting the row would cascade into the user's scans, findings and questions, so a database trigger refuses to delete a repository that has scans. Granting the repository again clears `removed_at`.
 
@@ -535,7 +535,7 @@ erDiagram
         TEXT category
         TEXT title
         TEXT file
-        TEXT fingerprint "sha256 of repo, category, title, file"
+        TEXT fingerprint "sha256 of repo, category, title, file; unique per scan"
         TEXT verdict "confirmed, needs_validation, rejected"
         TEXT source "ai-review, heuristic, osv, runtime-advisory, code-scanning"
         INTEGER priority
