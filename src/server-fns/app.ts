@@ -8,8 +8,8 @@ import { currentUser, requireUser } from '#/lib/session'
 import { installUrl, manageInstallationUrl, githubConfigured } from '#/lib/github/app'
 import { linkPublicRepo, listInstallTargets, listUserRepos, syncUserRepos } from '#/lib/github/repos'
 import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
-import { createScan, loadPreferences, productIdForRepo, startProductScan } from '#/lib/scanner/engine'
-import { listFindings, listProductScans, listQuestions, scanDetail } from '#/lib/queries'
+import { cancelScan, createScan, loadPreferences, productIdForRepo, startProductScan } from '#/lib/scanner/engine'
+import { listFindings, listProductScans, listQuestions, scanDetail, scanProgress } from '#/lib/queries'
 import { codexClientFor, codexEnvironmentFor, openscanHost, settleInternetProbes, startInternetProbe } from '#/lib/codex/runtime'
 import { environmentsSettingsUrl } from '#/lib/codex/cloud'
 import {
@@ -270,6 +270,21 @@ export const getScan = createServerFn({ method: 'GET' })
   })
 
 /** Reviews one repository: any public one typed as "owner/name" or a GitHub URL (linked on the way), or a linked one. */
+export const cancelScanFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ id: z.string() }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    return cancelScan(user.id, data.id)
+  })
+
+/** Cheap poll while a scan runs: status + new activity-log entries after `since`. */
+export const getScanProgress = createServerFn({ method: 'GET' })
+  .validator(z.object({ id: z.string(), since: z.number().int().min(0).default(0) }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    return scanProgress(user.id, data.id, data.since)
+  })
+
 export const scanRepo = createServerFn({ method: 'POST' })
   .validator(z.object({ repo: z.string().trim().min(1).max(300) }))
   .handler(async ({ data }) => {

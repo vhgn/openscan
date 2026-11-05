@@ -165,6 +165,7 @@ export function Verdict({ verdict }: { verdict: string | null }) {
 export function StatusMark({ status }: { status: string }) {
   if (status === 'completed') return <span className="inline-block h-1.5 w-1.5 rounded-full bg-ink" aria-label="completed" />
   if (status === 'failed') return <span className="inline-block h-1.5 w-1.5 rounded-full bg-alarm" aria-label="failed" />
+  if (status === 'cancelled') return <span className="inline-block h-1.5 w-1.5 rounded-full border border-muted" aria-label="cancelled" />
   return <span className="pulse-dot inline-block h-1.5 w-1.5 rounded-full bg-gold" aria-label={status} />
 }
 

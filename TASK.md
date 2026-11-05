@@ -48,7 +48,7 @@ You decide the exact UX, API, states, data model, and flow.
 | --- | --- |
 | Submit a GitHub repository | GitHub App install + repo picker (`/onboarding`), `POST /api/scans` (by linked repo id). Demo mode accepts public `owner/repo` names: `/api/dev/login?repos=owner/repo` |
 | Start a scan | "Scan now" on `/dashboard`, `POST /api/scans`, automatic first scan after onboarding, scheduled/on-push scans |
-| Track progress | `/scans/:id` (live progress bar + activity log, polling), `GET /api/scans/:id` |
-| Review the result | `/scans/:id`: overall risk, headline, *what matters*, *what to do next*, ranked findings with impact, fix and optional PoC |
+| Track progress | `/scans/:id` (live progress bar + activity log, cancel), `GET /api/scans/:id/progress?since=` (cursor + ETag), `POST /api/scans/:id/cancel` |
+| Review the result | `/scans/:id`: overall risk, headline, *what matters*, *what to do next*, ranked findings with impact, fix and optional PoC. `GET /api/scans/:id` (JSON), `GET /api/scans/:id/sarif` (SARIF 2.1.0 export) |
 | Node.js + TypeScript backend | TanStack Start server functions + API routes on Cloudflare Workers (`nodejs_compat`), D1, Queues |
 | README with product/tech decisions + coding-agent usage | [README.md](./README.md) (details in [docs/TECHNICAL.md](./docs/TECHNICAL.md)) |

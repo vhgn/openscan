@@ -38,7 +38,7 @@ The customer asked for three things, and each one shaped the product:
 
 - **"Not a raw scanner report."** The output is a *brief*: overall risk in one sentence, what matters, numbered next actions, then findings in fix order. A second agent tries to disprove each serious finding. The report marks it verified, needs validation, or rejected.
 - **"Understand what matters."** Risk depends on facts the code can't show, such as whether the service is public and what data it holds. The AI asks about these while it reads, answers its own questions when later files settle them, and shows the user only the rest. Answers are reused, so it never asks twice. Onboarding also records preferences: frequency, depth, focus, severity threshold and audience.
-- **"A product experience, not just an API."** You sign in with GitHub, install a read-only GitHub App, link ChatGPT and watch the first read with live progress. Then you land on a one-page dashboard, and scans run on a schedule or on push. A REST API (`/api/scans`, spec in [`public/openapi.json`](./public/openapi.json)) exists as a secondary way in.
+- **"A product experience, not just an API."** You sign in with GitHub, install a read-only GitHub App, link ChatGPT and watch the first read with live progress. Then you land on a one-page dashboard, and scans run on a schedule or on push. A REST API (`/api/scans`, spec in [`public/openapi.json`](./public/openapi.json)) exists as a secondary way in: starting a scan is idempotent, progress can be polled cheaply, a scan can be cancelled, and a brief exports as SARIF.
 
 "Code or dependencies" became both: AI code review plus dependency data from OSV.dev. The reader is an engineering lead or CTO who wants a defensible plan, not 400 rows.
 

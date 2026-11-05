@@ -89,8 +89,18 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "That scan is already queued or running (`existing: true`); safe to retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartScanResponse"
+                }
+              }
+            }
+          },
           "202": {
-            "description": "Queued (or the already running scan of that repository)",
+            "description": "Queued",
             "content": {
               "application/json": {
                 "schema": {
@@ -156,7 +166,166 @@
       "get": {
         "operationId": "getApiScansScanId",
         "summary": "Get a scan",
-        "description": "Status, phase, progress, event log and, once completed, the brief: summary, findings and questions.",
+        "description": "Status, phase, progress, event log and, once completed, the brief: summary, findings and questions. To follow a running scan cheaply, poll `/api/scans/{scanId}/progress` instead.",
+        "tags": [
+          "Scans"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scanId",
+            "in": "path",
+            "required": true,
+            "description": "Scan id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "ETag from an earlier response: 304 while nothing changed",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The scan (with an ETag)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanDetail"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified since the ETag in If-None-Match"
+          },
+          "401": {
+            "description": "No valid session cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found: no such scan for this user",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scans/{scanId}/progress": {
+      "get": {
+        "operationId": "getApiScansScanIdProgress",
+        "summary": "Follow a scan",
+        "description": "The cheap poll: status, phase, progress and only the log lines after `since`. Poll every couple of seconds, pass `cursor` back as `since`, and send If-None-Match to get 304 while nothing changed.",
+        "tags": [
+          "Scans"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scanId",
+            "in": "path",
+            "required": true,
+            "description": "Scan id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Event id cursor from the previous response (default 0: every event)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "description": "ETag from an earlier response",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Progress (with an ETag)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanProgress"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified since the ETag in If-None-Match"
+          },
+          "400": {
+            "description": "invalid_since",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scans/{scanId}/cancel": {
+      "post": {
+        "operationId": "postApiScansScanIdCancel",
+        "summary": "Cancel a scan",
+        "description": "Stops a queued or running scan. A step already running finishes, but the scan never moves again; findings already written are kept.",
         "tags": [
           "Scans"
         ],
@@ -178,11 +347,11 @@
         ],
         "responses": {
           "200": {
-            "description": "The scan",
+            "description": "Cancelled",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScanDetail"
+                  "$ref": "#/components/schemas/CancelScanResponse"
                 }
               }
             }
@@ -198,7 +367,78 @@
             }
           },
           "404": {
-            "description": "not_found: no such scan for this user",
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "not_active: the scan already finished (its `status` is included)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scans/{scanId}/sarif": {
+      "get": {
+        "operationId": "getApiScansScanIdSarif",
+        "summary": "Export a brief as SARIF",
+        "description": "The completed security brief as a SARIF 2.1.0 download (`application/sarif+json`), for GitHub code scanning or any SARIF tool. Dismissed, fixed and validator-rejected findings are included as suppressed results.",
+        "tags": [
+          "Scans"
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "scanId",
+            "in": "path",
+            "required": true,
+            "description": "Scan id",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SARIF 2.1.0 log (application/sarif+json attachment)"
+          },
+          "401": {
+            "description": "No valid session cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "not_a_security_scan, or scan_not_completed",
             "content": {
               "application/json": {
                 "schema": {
@@ -667,6 +907,23 @@
       }
     },
     "schemas": {
+      "CancelScanResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "const": "cancelled"
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
       "Error": {
         "type": "object",
         "properties": {
@@ -835,7 +1092,8 @@
               "queued",
               "running",
               "completed",
-              "failed"
+              "failed",
+              "cancelled"
             ],
             "description": "Derived from its repository scans"
           },
@@ -1019,7 +1277,8 @@
                   "queued",
                   "running",
                   "completed",
-                  "failed"
+                  "failed",
+                  "cancelled"
                 ]
               },
               "phase": {
@@ -1267,7 +1526,8 @@
               "queued",
               "running",
               "completed",
-              "failed"
+              "failed",
+              "cancelled"
             ]
           },
           "phase": {
@@ -1339,6 +1599,113 @@
           "risk",
           "headline",
           "findings"
+        ],
+        "additionalProperties": false
+      },
+      "ScanProgress": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "phase": {
+            "type": "string"
+          },
+          "progress": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Bumped by every step: refetch the full scan only when this changes"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991,
+                "description": "Unix time in milliseconds"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "live": {
+            "type": "boolean",
+            "description": "true while queued or running"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "ts": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991,
+                  "description": "Unix time in milliseconds"
+                },
+                "level": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "ts",
+                "level",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Only the log lines after `since` (at most 200)"
+          },
+          "cursor": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "Pass back as `since` on the next poll"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "phase",
+          "progress",
+          "error",
+          "updated_at",
+          "finished_at",
+          "live",
+          "events",
+          "cursor"
         ],
         "additionalProperties": false
       },
@@ -1442,12 +1809,17 @@
           "url": {
             "type": "string",
             "description": "Path of the report page"
+          },
+          "existing": {
+            "type": "boolean",
+            "description": "true when this scan was already queued or running (nothing new was started)"
           }
         },
         "required": [
           "id",
           "repo",
-          "url"
+          "url",
+          "existing"
         ],
         "additionalProperties": false
       },

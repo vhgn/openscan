@@ -27,6 +27,9 @@ import { Route as ApiScansIndexRouteImport } from './routes/api/scans/index'
 import { Route as ApiScansScanIdRouteImport } from './routes/api/scans/$scanId'
 import { Route as ApiAuthGithubCallbackRouteImport } from './routes/api/auth/github/callback'
 import { Route as ApiAuthGithubLoginRouteImport } from './routes/api/auth/github/login'
+import { Route as ApiScansScanIdCancelRouteImport } from './routes/api/scans/$scanId/cancel'
+import { Route as ApiScansScanIdProgressRouteImport } from './routes/api/scans/$scanId/progress'
+import { Route as ApiScansScanIdSarifRouteImport } from './routes/api/scans/$scanId/sarif'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -118,6 +121,21 @@ const ApiAuthGithubLoginRoute = ApiAuthGithubLoginRouteImport.update({
   path: '/api/auth/github/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiScansScanIdCancelRoute = ApiScansScanIdCancelRouteImport.update({
+  id: '/cancel',
+  path: '/cancel',
+  getParentRoute: () => ApiScansScanIdRoute,
+} as any)
+const ApiScansScanIdProgressRoute = ApiScansScanIdProgressRouteImport.update({
+  id: '/progress',
+  path: '/progress',
+  getParentRoute: () => ApiScansScanIdRoute,
+} as any)
+const ApiScansScanIdSarifRoute = ApiScansScanIdSarifRouteImport.update({
+  id: '/sarif',
+  path: '/sarif',
+  getParentRoute: () => ApiScansScanIdRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -134,10 +152,13 @@ export interface FileRoutesByFullPath {
   '/api/dev/login': typeof ApiDevLoginRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
-  '/api/scans/$scanId': typeof ApiScansScanIdRoute
+  '/api/scans/$scanId': typeof ApiScansScanIdRouteWithChildren
   '/api/scans/': typeof ApiScansIndexRoute
   '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
   '/api/auth/github/login': typeof ApiAuthGithubLoginRoute
+  '/api/scans/$scanId/cancel': typeof ApiScansScanIdCancelRoute
+  '/api/scans/$scanId/progress': typeof ApiScansScanIdProgressRoute
+  '/api/scans/$scanId/sarif': typeof ApiScansScanIdSarifRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -154,10 +175,13 @@ export interface FileRoutesByTo {
   '/api/dev/login': typeof ApiDevLoginRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
-  '/api/scans/$scanId': typeof ApiScansScanIdRoute
+  '/api/scans/$scanId': typeof ApiScansScanIdRouteWithChildren
   '/api/scans': typeof ApiScansIndexRoute
   '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
   '/api/auth/github/login': typeof ApiAuthGithubLoginRoute
+  '/api/scans/$scanId/cancel': typeof ApiScansScanIdCancelRoute
+  '/api/scans/$scanId/progress': typeof ApiScansScanIdProgressRoute
+  '/api/scans/$scanId/sarif': typeof ApiScansScanIdSarifRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -175,10 +199,13 @@ export interface FileRoutesById {
   '/api/dev/login': typeof ApiDevLoginRoute
   '/api/github/setup': typeof ApiGithubSetupRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
-  '/api/scans/$scanId': typeof ApiScansScanIdRoute
+  '/api/scans/$scanId': typeof ApiScansScanIdRouteWithChildren
   '/api/scans/': typeof ApiScansIndexRoute
   '/api/auth/github/callback': typeof ApiAuthGithubCallbackRoute
   '/api/auth/github/login': typeof ApiAuthGithubLoginRoute
+  '/api/scans/$scanId/cancel': typeof ApiScansScanIdCancelRoute
+  '/api/scans/$scanId/progress': typeof ApiScansScanIdProgressRoute
+  '/api/scans/$scanId/sarif': typeof ApiScansScanIdSarifRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -201,6 +228,9 @@ export interface FileRouteTypes {
     | '/api/scans/'
     | '/api/auth/github/callback'
     | '/api/auth/github/login'
+    | '/api/scans/$scanId/cancel'
+    | '/api/scans/$scanId/progress'
+    | '/api/scans/$scanId/sarif'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -221,6 +251,9 @@ export interface FileRouteTypes {
     | '/api/scans'
     | '/api/auth/github/callback'
     | '/api/auth/github/login'
+    | '/api/scans/$scanId/cancel'
+    | '/api/scans/$scanId/progress'
+    | '/api/scans/$scanId/sarif'
   id:
     | '__root__'
     | '/'
@@ -241,6 +274,9 @@ export interface FileRouteTypes {
     | '/api/scans/'
     | '/api/auth/github/callback'
     | '/api/auth/github/login'
+    | '/api/scans/$scanId/cancel'
+    | '/api/scans/$scanId/progress'
+    | '/api/scans/$scanId/sarif'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -258,7 +294,7 @@ export interface RootRouteChildren {
   ApiDevLoginRoute: typeof ApiDevLoginRoute
   ApiGithubSetupRoute: typeof ApiGithubSetupRoute
   ApiGithubWebhookRoute: typeof ApiGithubWebhookRoute
-  ApiScansScanIdRoute: typeof ApiScansScanIdRoute
+  ApiScansScanIdRoute: typeof ApiScansScanIdRouteWithChildren
   ApiScansIndexRoute: typeof ApiScansIndexRoute
   ApiAuthGithubCallbackRoute: typeof ApiAuthGithubCallbackRoute
   ApiAuthGithubLoginRoute: typeof ApiAuthGithubLoginRoute
@@ -392,8 +428,45 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthGithubLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/scans/$scanId/cancel': {
+      id: '/api/scans/$scanId/cancel'
+      path: '/cancel'
+      fullPath: '/api/scans/$scanId/cancel'
+      preLoaderRoute: typeof ApiScansScanIdCancelRouteImport
+      parentRoute: typeof ApiScansScanIdRoute
+    }
+    '/api/scans/$scanId/progress': {
+      id: '/api/scans/$scanId/progress'
+      path: '/progress'
+      fullPath: '/api/scans/$scanId/progress'
+      preLoaderRoute: typeof ApiScansScanIdProgressRouteImport
+      parentRoute: typeof ApiScansScanIdRoute
+    }
+    '/api/scans/$scanId/sarif': {
+      id: '/api/scans/$scanId/sarif'
+      path: '/sarif'
+      fullPath: '/api/scans/$scanId/sarif'
+      preLoaderRoute: typeof ApiScansScanIdSarifRouteImport
+      parentRoute: typeof ApiScansScanIdRoute
+    }
   }
 }
+
+interface ApiScansScanIdRouteChildren {
+  ApiScansScanIdCancelRoute: typeof ApiScansScanIdCancelRoute
+  ApiScansScanIdProgressRoute: typeof ApiScansScanIdProgressRoute
+  ApiScansScanIdSarifRoute: typeof ApiScansScanIdSarifRoute
+}
+
+const ApiScansScanIdRouteChildren: ApiScansScanIdRouteChildren = {
+  ApiScansScanIdCancelRoute: ApiScansScanIdCancelRoute,
+  ApiScansScanIdProgressRoute: ApiScansScanIdProgressRoute,
+  ApiScansScanIdSarifRoute: ApiScansScanIdSarifRoute,
+}
+
+const ApiScansScanIdRouteWithChildren = ApiScansScanIdRoute._addFileChildren(
+  ApiScansScanIdRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
@@ -410,7 +483,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiDevLoginRoute: ApiDevLoginRoute,
   ApiGithubSetupRoute: ApiGithubSetupRoute,
   ApiGithubWebhookRoute: ApiGithubWebhookRoute,
-  ApiScansScanIdRoute: ApiScansScanIdRoute,
+  ApiScansScanIdRoute: ApiScansScanIdRouteWithChildren,
   ApiScansIndexRoute: ApiScansIndexRoute,
   ApiAuthGithubCallbackRoute: ApiAuthGithubCallbackRoute,
   ApiAuthGithubLoginRoute: ApiAuthGithubLoginRoute,

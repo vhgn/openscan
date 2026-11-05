@@ -41,7 +41,10 @@ export const Route = createFileRoute('/api/scans/')({
         }
         const r = await startScanFor(user.id, 'repo' in data ? data.repo : data.repoId, data.kind)
         if (!r.ok) return Response.json({ error: START_SCAN_ERRORS[r.error].code, message: r.message }, { status: START_SCAN_ERRORS[r.error].status })
-        return Response.json({ id: r.id, repo: r.repo, url: `/scans/${r.id}` }, { status: 202 })
+        return Response.json(
+          { id: r.id, repo: r.repo, url: `/scans/${r.id}`, existing: r.existing },
+          { status: r.existing ? 200 : 202, headers: { location: `/api/scans/${r.id}` } },
+        )
       },
     },
   },

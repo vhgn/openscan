@@ -1,9 +1,9 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Empty, ErrorNote, Lede, Margin, Page, Progress, SectionHead, Severity, StatusMark, Title, Verdict, phaseLabel, spell, timeAgo } from '#/components/ui'
 import { QuestionCard, QuestionList } from '#/components/QuestionCard'
 import { FindingFilters, applyFindingFilters, isArea, isLevel, type FindingFilterState } from '#/components/FindingFilters'
-import { getScan, updateFindingStatus } from '#/server-fns/app'
+import { cancelScanFn, getScan, getScanProgress, updateFindingStatus } from '#/server-fns/app'
 import type { RepoProfile, ScanSummary } from '#/lib/types'
 import { SKILL_BY_ID } from '#/lib/skills/registry'
 
@@ -52,11 +52,40 @@ function ScanPage() {
   const router = useRouter()
   const s = d.scan
   const live = s.status === 'queued' || s.status === 'running'
+  const [cancelling, setCancelling] = useState(false)
+
+  // Follow a running scan with the cheap progress read (status + new log lines after a cursor).
+  // The full report is refetched only when the scan itself changed (every step bumps updated_at).
+  const [tail, setTail] = useState<typeof d.events>([])
+  const cursor = useRef(0)
+  const seen = useRef<{ status: string; updatedAt: number }>({ status: s.status, updatedAt: s.updated_at })
+  useEffect(() => {
+    cursor.current = d.events.at(-1)?.id ?? 0
+    seen.current = { status: s.status, updatedAt: s.updated_at }
+    setTail([])
+  }, [d.events, s.status, s.updated_at])
   useEffect(() => {
     if (!live) return
-    const t = setInterval(() => router.invalidate(), 2000)
-    return () => clearInterval(t)
-  }, [live, router])
+    let stopped = false
+    const t = setInterval(async () => {
+      const p = await getScanProgress({ data: { id: s.id, since: cursor.current } }).catch(() => null)
+      if (stopped || !p) return
+      if (p.events.length) {
+        cursor.current = p.cursor
+        setTail((prev) => [...prev, ...p.events])
+      }
+      if (p.status !== seen.current.status || p.updated_at !== seen.current.updatedAt) {
+        seen.current = { status: p.status, updatedAt: p.updated_at }
+        void router.invalidate()
+      }
+    }, 2000)
+    return () => {
+      stopped = true
+      clearInterval(t)
+    }
+  }, [live, s.id, router])
+  const events = tail.length ? [...d.events, ...tail] : d.events
+  const lastEvent = events.at(-1)
 
   const summary = s.kind === 'security' && s.summary?.headline ? (s.summary as ScanSummary) : null
   const profile: RepoProfile | null = (s.kind === 'understand' ? (s.summary?.profile ?? d.profile) : d.profile) ?? null
@@ -96,9 +125,11 @@ function ScanPage() {
       {summary ? (
         <Title className="mt-6">{summary.headline}</Title>
       ) : s.kind === 'understand' ? (
-        <Title className="mt-6">{live ? `Reading ${s.repo}.` : s.status === 'failed' ? `Reading ${s.repo} failed.` : `What we learned about ${s.repo}.`}</Title>
+        <Title className="mt-6">
+          {live ? `Reading ${s.repo}.` : s.status === 'failed' ? `Reading ${s.repo} failed.` : s.status === 'cancelled' ? `Reading ${s.repo} was cancelled.` : `What we learned about ${s.repo}.`}
+        </Title>
       ) : (
-        <Title className="mt-6">{s.status === 'failed' ? 'This review did not finish.' : 'The review is under way.'}</Title>
+        <Title className="mt-6">{s.status === 'failed' ? 'This review did not finish.' : s.status === 'cancelled' ? 'This review was cancelled.' : 'The review is under way.'}</Title>
       )}
 
       {live && (
@@ -107,10 +138,36 @@ function ScanPage() {
             <StatusMark status={s.status} /> {phaseLabel(s.phase)} · {s.progress}%
           </div>
           <Progress value={s.progress} />
+          {lastEvent && <p className="mt-2 truncate font-mono text-[11.5px] text-faint">{lastEvent.message}</p>}
           <p className="mt-3 text-[16px] italic text-muted">This page updates by itself. You can leave; the brief will be on your home page.</p>
+          <button
+            className="mt-3 font-sans text-[12.5px] text-muted underline underline-offset-4 hover:text-ink disabled:opacity-50"
+            disabled={cancelling}
+            onClick={async () => {
+              if (!window.confirm('Cancel this review? Findings found so far are kept.')) return
+              setCancelling(true)
+              try {
+                await cancelScanFn({ data: { id: s.id } })
+                await router.invalidate()
+              } finally {
+                setCancelling(false)
+              }
+            }}
+          >
+            {cancelling ? 'Cancelling…' : 'Cancel this review'}
+          </button>
         </div>
       )}
       {s.status === 'failed' && <ErrorNote>Failed: {s.error}</ErrorNote>}
+      {s.status === 'cancelled' && (
+        <p className="mt-6 font-sans text-[13px] text-muted">
+          Cancelled {timeAgo(s.finished_at)}. Anything found before that is listed below.{' '}
+          <Link to="/home" className="link text-ink-3">
+            Start a new review
+          </Link>
+          .
+        </p>
+      )}
 
       {d.codexTasks.length > 0 && (
         <p className="mt-6 font-sans text-[13px] text-muted">
@@ -146,6 +203,14 @@ function ScanPage() {
             .
           </Lede>
           {summary.engineNote && <p className="mt-3 font-sans text-[13px] text-muted">{summary.engineNote}</p>}
+          {s.status === 'completed' && (
+            <p className="mt-3 font-sans text-[13px] text-muted">
+              <a href={`/api/scans/${s.id}/sarif`} download className="link text-ink-3">
+                Download as SARIF
+              </a>{' '}
+              for GitHub code scanning or any tool that reads SARIF 2.1.0.
+            </p>
+          )}
 
           {summary.whatMatters.length > 0 && (
             <>
@@ -392,10 +457,10 @@ function ScanPage() {
         )}
         <details className="mt-4">
           <summary className="cursor-pointer hover:text-ink">
-            Activity log ({d.events.length} entries) · scan {s.id}
+            Activity log ({events.length} entries) · scan {s.id}
           </summary>
           <ol className="mt-3 max-h-80 space-y-1 overflow-y-auto font-mono text-[11.5px]">
-            {d.events.map((e) => (
+            {events.map((e) => (
               <li key={e.id} className={e.level === 'error' ? 'text-alarm' : e.level === 'warn' ? 'text-amber' : ''}>
                 <span className="text-faint">{new Date(e.ts).toLocaleTimeString()}</span> {e.message}
               </li>

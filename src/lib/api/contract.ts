@@ -15,7 +15,7 @@ import { z } from 'zod'
 
 const SEVERITY = z.enum(['critical', 'high', 'medium', 'low', 'info'])
 const SCAN_KIND = z.enum(['understand', 'security'])
-const SCAN_STATUS = z.enum(['queued', 'running', 'completed', 'failed'])
+const SCAN_STATUS = z.enum(['queued', 'running', 'completed', 'failed', 'cancelled'])
 const millis = z.number().int().describe('Unix time in milliseconds')
 
 export const ApiError = z
@@ -55,6 +55,7 @@ export const StartScanResponse = z
         id: z.string().describe('Repository scan id'),
         repo: z.string().describe('owner/name'),
         url: z.string().describe('Path of the report page'),
+        existing: z.boolean().describe('true when this scan was already queued or running (nothing new was started)'),
       })
       .meta({ id: 'StartRepoScanResponse' }),
     z
@@ -175,6 +176,23 @@ export const ScanDetail = z
   })
   .meta({ id: 'ScanDetail' })
 
+export const ScanProgress = z
+  .object({
+    id: z.string(),
+    status: SCAN_STATUS,
+    phase: z.string(),
+    progress: z.number().int().min(0).max(100),
+    error: z.string().nullable(),
+    updated_at: millis.describe('Bumped by every step: refetch the full scan only when this changes'),
+    finished_at: millis.nullable(),
+    live: z.boolean().describe('true while queued or running'),
+    events: z.array(z.object({ id: z.number().int(), ts: millis, level: z.string(), message: z.string() })).describe('Only the log lines after `since` (at most 200)'),
+    cursor: z.number().int().describe('Pass back as `since` on the next poll'),
+  })
+  .meta({ id: 'ScanProgress' })
+
+export const CancelScanResponse = z.object({ id: z.string(), status: z.literal('cancelled') }).meta({ id: 'CancelScanResponse' })
+
 // ---------------------------------------------------------------- registry
 
 export type Auth = 'session' | 'webhook' | 'agent' | 'none'
@@ -222,7 +240,8 @@ export const API_ROUTES: ApiRoute[] = [
     auth: 'session',
     body: StartScanBody,
     responses: {
-      202: { description: 'Queued (or the already running scan of that repository)', schema: StartScanResponse },
+      200: { description: 'That scan is already queued or running (`existing: true`); safe to retry', schema: StartScanResponse },
+      202: { description: 'Queued', schema: StartScanResponse },
       400: { description: 'invalid_body, or invalid_repo when `repo` is not a GitHub repository', schema: ApiError },
       401: unauthenticated,
       404: { description: 'product_not_found, repo_not_found (not linked, or no such public repository) or repo_private', schema: ApiError },
@@ -235,14 +254,68 @@ export const API_ROUTES: ApiRoute[] = [
     path: '/api/scans/{scanId}',
     routeId: '/api/scans/$scanId',
     summary: 'Get a scan',
-    description: 'Status, phase, progress, event log and, once completed, the brief: summary, findings and questions.',
+    description: 'Status, phase, progress, event log and, once completed, the brief: summary, findings and questions. To follow a running scan cheaply, poll `/api/scans/{scanId}/progress` instead.',
+    tags: ['Scans'],
+    auth: 'session',
+    pathParams: { scanId: 'Scan id' },
+    headers: { 'If-None-Match': { description: 'ETag from an earlier response: 304 while nothing changed' } },
+    responses: {
+      200: { description: 'The scan (with an ETag)', schema: ScanDetail },
+      304: { description: 'Not modified since the ETag in If-None-Match' },
+      401: unauthenticated,
+      404: { description: 'not_found: no such scan for this user', schema: ApiError },
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/scans/{scanId}/progress',
+    routeId: '/api/scans/$scanId/progress',
+    summary: 'Follow a scan',
+    description: 'The cheap poll: status, phase, progress and only the log lines after `since`. Poll every couple of seconds, pass `cursor` back as `since`, and send If-None-Match to get 304 while nothing changed.',
+    tags: ['Scans'],
+    auth: 'session',
+    pathParams: { scanId: 'Scan id' },
+    query: { since: { description: 'Event id cursor from the previous response (default 0: every event)' } },
+    headers: { 'If-None-Match': { description: 'ETag from an earlier response' } },
+    responses: {
+      200: { description: 'Progress (with an ETag)', schema: ScanProgress },
+      304: { description: 'Not modified since the ETag in If-None-Match' },
+      400: { description: 'invalid_since', schema: ApiError },
+      401: unauthenticated,
+      404: { description: 'not_found', schema: ApiError },
+    },
+  },
+  {
+    method: 'post',
+    path: '/api/scans/{scanId}/cancel',
+    routeId: '/api/scans/$scanId/cancel',
+    summary: 'Cancel a scan',
+    description: 'Stops a queued or running scan. A step already running finishes, but the scan never moves again; findings already written are kept.',
     tags: ['Scans'],
     auth: 'session',
     pathParams: { scanId: 'Scan id' },
     responses: {
-      200: { description: 'The scan', schema: ScanDetail },
+      200: { description: 'Cancelled', schema: CancelScanResponse },
       401: unauthenticated,
-      404: { description: 'not_found: no such scan for this user', schema: ApiError },
+      404: { description: 'not_found', schema: ApiError },
+      409: { description: 'not_active: the scan already finished (its `status` is included)', schema: ApiError },
+    },
+  },
+  {
+    method: 'get',
+    path: '/api/scans/{scanId}/sarif',
+    routeId: '/api/scans/$scanId/sarif',
+    summary: 'Export a brief as SARIF',
+    description:
+      'The completed security brief as a SARIF 2.1.0 download (`application/sarif+json`), for GitHub code scanning or any SARIF tool. Dismissed, fixed and validator-rejected findings are included as suppressed results.',
+    tags: ['Scans'],
+    auth: 'session',
+    pathParams: { scanId: 'Scan id' },
+    responses: {
+      200: { description: 'SARIF 2.1.0 log (application/sarif+json attachment)' },
+      401: unauthenticated,
+      404: { description: 'not_found', schema: ApiError },
+      409: { description: 'not_a_security_scan, or scan_not_completed', schema: ApiError },
     },
   },
   {

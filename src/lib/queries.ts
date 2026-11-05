@@ -62,7 +62,7 @@ export interface ProductScanItem {
   product: string
   trigger: string
   /** Derived from the repository scans it owns. */
-  status: 'queued' | 'running' | 'completed' | 'failed'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   progress: number
   created_at: number
   finished_at: number | null
@@ -96,7 +96,9 @@ export async function listProductScans(userId: string, opts: { productId?: strin
     const live = scans.some((s) => s.status === 'queued' || s.status === 'running')
     const status = live
       ? scans.some((s) => s.status === 'running') ? 'running' : 'queued'
-      : scans.length && scans.every((s) => s.status === 'failed') ? 'failed' : 'completed'
+      : scans.length && scans.every((s) => s.status === 'failed') ? 'failed'
+      : scans.length && scans.every((s) => s.status === 'failed' || s.status === 'cancelled') ? 'cancelled'
+      : 'completed'
     const risks = scans.map((s) => s.risk).filter((r): r is string => Boolean(r)).sort((a, b) => RISK_ORDER.indexOf(a) - RISK_ORDER.indexOf(b))
     return {
       id: ps.id,
@@ -104,7 +106,7 @@ export async function listProductScans(userId: string, opts: { productId?: strin
       product: ps.product,
       trigger: ps.trigger,
       status,
-      progress: scans.length ? Math.round(scans.reduce((n, s) => n + (s.status === 'failed' ? 100 : s.progress), 0) / scans.length) : 0,
+      progress: scans.length ? Math.round(scans.reduce((n, s) => n + (s.status === 'failed' || s.status === 'cancelled' ? 100 : s.progress), 0) / scans.length) : 0,
       created_at: ps.created_at,
       finished_at: live ? null : Math.max(0, ...scans.map((s) => s.finished_at ?? 0)) || null,
       risk: risks[0] ?? null,
@@ -138,6 +140,7 @@ export interface FindingView {
   threat_model: string | null
   source: string | null
   skills_json: string | null
+  fingerprint: string
   /** Derived product areas (Auth, Payments, …) for filtering; not stored. */
   areas: AreaId[]
 }
@@ -213,3 +216,38 @@ export async function scanDetail(userId: string, scanId: string) {
   }
 }
 export type ScanDetail = NonNullable<Awaited<ReturnType<typeof scanDetail>>>
+
+export interface ScanEventView {
+  id: number
+  ts: number
+  level: string
+  message: string
+}
+
+/**
+ * The cheap read for following a scan: status, phase, progress and only the activity-log
+ * entries after `sinceEventId` (a cursor). Clients poll this and refetch the full report
+ * only when `updated_at` or `status` changes (each step bumps `updated_at`).
+ */
+export async function scanProgress(userId: string, scanId: string, sinceEventId = 0) {
+  const scan = await first<{ id: string; status: string; phase: string; progress: number; error: string | null; updated_at: number; finished_at: number | null }>(
+    'SELECT id, status, phase, progress, error, updated_at, finished_at FROM scans WHERE id = ? AND user_id = ?',
+    scanId,
+    userId,
+  )
+  if (!scan) return null
+  const events = await all<ScanEventView>(
+    'SELECT id, ts, level, message FROM scan_events WHERE scan_id = ? AND id > ? ORDER BY id LIMIT 200',
+    scanId,
+    sinceEventId,
+  )
+  const live = scan.status === 'queued' || scan.status === 'running'
+  return {
+    ...scan,
+    live,
+    events,
+    /** Pass back as `since` on the next poll. */
+    cursor: events.at(-1)?.id ?? sinceEventId,
+  }
+}
+export type ScanProgress = NonNullable<Awaited<ReturnType<typeof scanProgress>>>

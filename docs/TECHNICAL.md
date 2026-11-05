@@ -59,6 +59,7 @@ After signing in, pick repositories (or type any public `owner/repo`), then **Lo
 | `npm run setup` | Create `.dev.vars`, generate secrets, check GitHub credentials, migrate the local D1 (`-- --demo`: no GitHub App) |
 | `npm run dev` | Vite + workerd on :3000 (pages, API, queue consumer, D1) |
 | `npm test` | Unit tests (Node's built-in test runner) |
+| `npm run demo -- <github url>` | End-to-end REST walkthrough against the running dev server (demo sign-in, `POST /api/scans` twice to show it is idempotent, the progress poll with ETags, the brief, the SARIF export). Needs `DEV_DEMO_LOGIN=1` |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run generate` | Regenerate `public/openapi.json` from the API contract (`-- --check` fails if it is stale) |
 | `npm run build` | Production build into `dist/` |
@@ -225,6 +226,8 @@ Every product has one **memory** (table `memory`), so agents don't re-check the 
 ### Scan engine (`src/lib/scanner/engine.ts`)
 
 A resumable state machine. **Each queue message runs exactly one step** and stores its state in D1, so every Worker invocation stays short, retries are per step, and the UI gets fine-grained progress for free.
+
+**Lifecycle.** `queued → running → completed | failed | cancelled`. A partial unique index (`scans_one_active`, migration `0011`) allows only **one active scan per user, repository and kind**: two concurrent `POST /api/scans` requests can't queue two scans, and the loser gets the winner's id back with `existing: true`. Cancelling sets `cancelled` at once; the step in flight finishes, but its final write is fenced on status (and on the step lease), its follow-up message can't take the lease of a cancelled scan, and findings already written are kept. Cancelling also revokes the scan's Codex agent tokens.
 
 | Kind | Steps | Purpose |
 | --- | --- | --- |
@@ -631,9 +634,12 @@ The full spec is [`public/openapi.json`](../public/openapi.json) (OpenAPI 3.1, s
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `POST` | `/api/scans` | `{ productId }` → `202 { productScanId, scanIds, url }`; or one repo: `{ repo: "owner/name" }` (any public repository, or a GitHub URL) or `{ repoId }`, plus `kind?: "security" \| "understand"` → `202 { id, repo, url }` |
+| `POST` | `/api/scans` | `{ productId }` → `202 { productScanId, scanIds, url }`; or one repo: `{ repo: "owner/name" }` (any public repository, or a GitHub URL) or `{ repoId }`, plus `kind?: "security" \| "understand"` → `202 { id, repo, url, existing: false }` with a `Location` header, or `200 { …, existing: true }` when that scan is already running (safe to retry) |
 | `GET` | `/api/scans` | Your product scans (each with its repository scans) and the flat list of scans |
-| `GET` | `/api/scans/:id` | Status, phase, progress, event log, summary, findings, questions |
+| `GET` | `/api/scans/:id` | Status, phase, progress, event log, summary, findings, questions. ETag'd: `If-None-Match` → `304` |
+| `GET` | `/api/scans/:id/progress?since=<eventId>` | The cheap poll: `{ status, phase, progress, live, updated_at, events, cursor }` with only the log lines after `since`. Pass `cursor` back as `since`. ETag'd |
+| `POST` | `/api/scans/:id/cancel` | `200 { id, status: "cancelled" }`; `409 { error: "not_active", status }` if it already finished |
+| `GET` | `/api/scans/:id/sarif` | The brief as **SARIF 2.1.0** (download), for GitHub code scanning or any SARIF tool. Dismissed, fixed and validator-rejected findings are included as suppressed results. `409` until the scan completes |
 | `POST` | `/api/github/webhook` | GitHub App webhook (HMAC-verified) |
 | `*` | `/api/chatgpt/*` | login-with-chatgpt routes (`login`, `status`, `session`, `models`, `responses`, …) |
 
@@ -653,6 +659,9 @@ The full spec is [`public/openapi.json`](../public/openapi.json) (OpenAPI 3.1, s
 - **Bounded context.** Files are ranked for security relevance (`select-files.ts`, unit-tested), truncated per file, and batched by a character budget. Depth preference controls how many files are reviewed.
 - **Real dependency data.** OSV.dev `querybatch` (free, no key) over lockfiles and manifests (npm, PyPI, Go, crates.io, RubyGems).
 - **Methodology from vetted skills, not ad-hoc prompts.** Trail of Bits, Cloudflare, Anthropic, NVIDIA, Cognition and OpenAI skills are vendored with their licenses. Their methods run as agent playbooks; parts that can be made deterministic run as tested code (runtime advisories, agentic-actions rules). A separate validator agent tries to refute every serious finding before it reaches the report.
+- **The database is the source of truth for the scan lifecycle.** "One active scan" is a partial unique index rather than a check-then-insert in app code, and final state changes are compare-and-set updates. Retries, double-clicks, queue redelivery and cancel racing a running step all end in a consistent state. Tests run this SQL on SQLite, not a mock.
+- **Progress by polling, not SSE or WebSockets.** A scan is a chain of short queue steps, so no long-lived request knows when it is done, and Workers bill for open connections. Clients poll `…/progress` every 2 s, get only new log lines (cursor), and an empty `304` while nothing changed (ETag). The report page refetches the full brief only when `updated_at` moves. If push ever matters, a Durable Object per scan could fan out the same events.
+- **SARIF out.** SARIF 2.1.0 (with `security-severity`, stable `partialFingerprints`, and suppressions for dismissed or rejected findings) plugs the brief into GitHub code scanning or an ASPM platform without a custom integration.
 - **Graceful degradation everywhere:** heuristic engine without AI, jsDelivr/raw CDN fallback for public repositories, structured-output → plain-JSON fallback for models.
 
 ### Status: proof of concept, and no evals

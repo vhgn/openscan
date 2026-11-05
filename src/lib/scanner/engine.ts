@@ -124,31 +124,82 @@ export async function createScan(
   initialState: Partial<ScanState> = {},
   productScanId: string | null = null,
 ): Promise<string> {
-  const active = await first<{ id: string }>(
-    `SELECT id FROM scans WHERE user_id = ? AND repo_id = ? AND kind = ? AND status IN ('queued','running')`,
-    userId,
-    repoId,
-    kind,
-  )
-  if (active) return active.id
+  return (await createScanOnce(userId, repoId, kind, trigger, initialState, productScanId)).id
+}
+
+/**
+ * Starts a scan unless one of the same kind is already active for this user and repo, in which
+ * case that scan is returned with `existing: true`. Safe under concurrency: the partial unique
+ * index `scans_one_active` (migration 0011) makes the database the arbiter, so two simultaneous
+ * requests can never queue two scans.
+ */
+export async function createScanOnce(
+  userId: string,
+  repoId: number,
+  kind: ScanKind,
+  trigger: string,
+  initialState: Partial<ScanState> = {},
+  productScanId: string | null = null,
+): Promise<{ id: string; existing: boolean }> {
+  const activeScan = () =>
+    first<{ id: string }>(`SELECT id FROM scans WHERE user_id = ? AND repo_id = ? AND kind = ? AND status IN ('queued','running')`, userId, repoId, kind)
+  const active = await activeScan()
+  if (active) return { id: active.id, existing: true }
   const id = uid()
-  await run(
-    `INSERT INTO scans (id, user_id, repo_id, kind, trigger, status, phase, progress, state_json, created_at, updated_at, product_id, product_scan_id)
-     VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, ?, ?, ?, ?)`,
-    id,
-    userId,
-    repoId,
-    kind,
-    trigger,
-    JSON.stringify(initialState),
-    now(),
-    now(),
-    (await productForRepo(userId, repoId))?.id ?? null,
-    productScanId,
-  )
+  try {
+    await run(
+      `INSERT INTO scans (id, user_id, repo_id, kind, trigger, status, phase, progress, state_json, created_at, updated_at, product_id, product_scan_id)
+       VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, ?, ?, ?, ?)`,
+      id,
+      userId,
+      repoId,
+      kind,
+      trigger,
+      JSON.stringify(initialState),
+      now(),
+      now(),
+      (await productForRepo(userId, repoId))?.id ?? null,
+      productScanId,
+    )
+  } catch (err) {
+    // Lost the race to a concurrent request: hand back the scan that won.
+    if (!isUniqueViolation(err)) throw err
+    const winner = await activeScan()
+    if (winner) return { id: winner.id, existing: true }
+    throw err
+  }
   await logEvent(id, kind === 'understand' ? 'Queued: AI will read the repository' : `Queued security scan (${trigger})`)
   await enqueue(id)
-  return id
+  return { id, existing: false }
+}
+
+export function isUniqueViolation(err: unknown): boolean {
+  return /UNIQUE constraint failed/i.test(err instanceof Error ? err.message : String(err))
+}
+
+export type CancelResult = { ok: true } | { ok: false; reason: 'not_found' } | { ok: false; reason: 'not_active'; status: string }
+
+/**
+ * Cancels a queued or running scan. The step in flight (if any) finishes, but its final write is
+ * fenced on status, so nothing moves a cancelled scan again and the next queued step exits
+ * immediately (the lease only goes to active scans). Findings already written are kept.
+ */
+export async function cancelScan(userId: string, scanId: string): Promise<CancelResult> {
+  const cancelled = await first<{ id: string }>(
+    `UPDATE scans SET status = 'cancelled', finished_at = ?, updated_at = ?
+     WHERE id = ? AND user_id = ? AND status IN ('queued','running') RETURNING id`,
+    now(),
+    now(),
+    scanId,
+    userId,
+  )
+  if (cancelled) {
+    await revokeScanTokens(scanId) // Codex tasks lose product-memory access right away
+    await logEvent(scanId, 'Cancelled by the user', 'warn')
+    return { ok: true }
+  }
+  const scan = await first<{ status: string }>('SELECT status FROM scans WHERE id = ? AND user_id = ?', scanId, userId)
+  return scan ? { ok: false, reason: 'not_active', status: scan.status } : { ok: false, reason: 'not_found' }
 }
 
 /**
@@ -241,7 +292,7 @@ export async function runStep(scanId: string): Promise<void> {
 /** Runs one step while holding the lease. Returns the delay before the next step, or null when there is none. */
 async function leasedStep(scanId: string, leaseId: string): Promise<number | null> {
   const scan = await first<ScanRow>('SELECT * FROM scans WHERE id = ?', scanId)
-  if (!scan || scan.status === 'completed' || scan.status === 'failed') return null
+  if (!scan || (scan.status !== 'queued' && scan.status !== 'running')) return null // completed, failed or cancelled
   // Everything after loading the scan counts as the step: a crash while setting it up
   // (loading the user, preferences, product) uses an attempt like any other failure,
   // instead of escaping to the queue and being revived by the cron forever.
@@ -264,7 +315,7 @@ async function runLoadedStep(scan: ScanRow, leaseId: string): Promise<number | n
   if (repo.removed_at) return fail(scan, leaseId, `${repo.full_name} was removed from the GitHub App`)
 
   if (scan.status === 'queued') {
-    await run(`UPDATE scans SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?`, now(), now(), scan.id)
+    await run(`UPDATE scans SET status = 'running', started_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'`, now(), now(), scan.id)
   }
 
   const ctx: StepCtx = {
@@ -311,6 +362,13 @@ async function runLoadedStep(scan: ScanRow, leaseId: string): Promise<number | n
     }
     return result.delay ?? 0
   }
+}
+
+/** A fenced final write changed nothing: the user cancelled the scan meanwhile, or the lease was lost. */
+async function notApplied(scan: ScanRow): Promise<null> {
+  const current = await first<{ status: string }>('SELECT status FROM scans WHERE id = ?', scan.id)
+  if (current?.status === 'cancelled') return null
+  return lostLease(scan)
 }
 
 /** Our lease expired and another worker took the scan over: drop this step's result, the new holder continues. */
@@ -384,14 +442,14 @@ async function logEvent(scanId: string, message: string, level: 'info' | 'warn' 
 
 async function fail(scan: ScanRow, leaseId: string, message: string): Promise<null> {
   const changed = await exec(
-    `UPDATE scans SET status = 'failed', error = ?, finished_at = ?, updated_at = ? WHERE id = ? AND lease_id = ?`,
+    `UPDATE scans SET status = 'failed', error = ?, finished_at = ?, updated_at = ? WHERE id = ? AND lease_id = ? AND status IN ('queued','running')`,
     message.slice(0, 1000),
     now(),
     now(),
     scan.id,
     leaseId,
   )
-  if (!changed) return lostLease(scan)
+  if (!changed) return notApplied(scan)
   await revokeScanTokens(scan.id)
   await logEvent(scan.id, `Scan failed: ${message.slice(0, 300)}`, 'error')
   return null
@@ -399,14 +457,14 @@ async function fail(scan: ScanRow, leaseId: string, message: string): Promise<nu
 
 async function complete(ctx: StepCtx, leaseId: string) {
   const changed = await exec(
-    `UPDATE scans SET status = 'completed', progress = 100, finished_at = ?, updated_at = ? WHERE id = ? AND lease_id = ?`,
+    `UPDATE scans SET status = 'completed', progress = 100, finished_at = ?, updated_at = ? WHERE id = ? AND lease_id = ? AND status = 'running'`,
     now(),
     now(),
     ctx.scan.id,
     leaseId,
   )
   if (!changed) {
-    await lostLease(ctx.scan)
+    await notApplied(ctx.scan)
     return
   }
   await revokeScanTokens(ctx.scan.id)

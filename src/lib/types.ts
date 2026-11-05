@@ -56,7 +56,7 @@ export interface RepoRow {
 }
 
 export type ScanKind = 'understand' | 'security'
-export type ScanStatus = 'queued' | 'running' | 'completed' | 'failed'
+export type ScanStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 export interface ScanRow {
   id: string
