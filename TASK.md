@@ -1,6 +1,6 @@
 # Backend Home Assignment: "AI Scan Review Experience"
 
-> Transcribed from the original assignment PDF (`Agentic_poc.pdf`, OX Security). This file is the **source brief**; see [PRODUCT.md](./PRODUCT.md) for how we interpreted it and [README.md](./README.md) for how to run what we built.
+> Transcribed from the original assignment PDF (`Agentic_poc.pdf`, OX Security). This file is the **source brief**; see [PRODUCT.md](./PRODUCT.md) for how we interpreted it and [README.md](./README.md) for the short write-up and [docs/TECHNICAL.md](./docs/TECHNICAL.md) for how to run what we built.
 
 ## Context
 
@@ -51,4 +51,4 @@ You decide the exact UX, API, states, data model, and flow.
 | Track progress | `/scans/:id` (live progress bar + activity log, polling), `GET /api/scans/:id` |
 | Review the result | `/scans/:id`: overall risk, headline, *what matters*, *what to do next*, ranked findings with impact, fix and optional PoC |
 | Node.js + TypeScript backend | TanStack Start server functions + API routes on Cloudflare Workers (`nodejs_compat`), D1, Queues |
-| README with product/tech decisions + coding-agent usage | [README.md](./README.md) |
+| README with product/tech decisions + coding-agent usage | [README.md](./README.md) (details in [docs/TECHNICAL.md](./docs/TECHNICAL.md)) |

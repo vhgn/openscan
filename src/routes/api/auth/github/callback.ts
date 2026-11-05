@@ -5,7 +5,7 @@ import { createSession, sessionCookieHeader } from '#/lib/session'
 import { landingPathFor, upsertGithubUser } from '#/lib/users'
 import { first } from '#/lib/db'
 import type { UserRow } from '#/lib/types'
-import { safeNextPath } from '#/lib/oauth/core'
+import { safeNextPath } from '#/lib/redirect'
 
 function cookie(request: Request, name: string) {
   return (request.headers.get('cookie') ?? '')

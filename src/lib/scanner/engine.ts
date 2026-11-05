@@ -24,7 +24,7 @@
  * reporting + ToB patching-bugs.
  */
 import { env, aiMode } from '../env'
-import { all, batch, first, now, parseJson, run, uid } from '../db'
+import { all, batch, exec, first, now, parseJson, run, uid } from '../db'
 import { sha256Hex } from '../crypto'
 import { backgroundLLM, type BackgroundLLM } from '../chatgpt'
 import { fetchChangedFiles, fetchCodeScanningAlerts, fetchFile, fetchTree, getRepo, repoToken } from '../github/repos'
@@ -38,6 +38,7 @@ import { brotliFindings, installScriptPackages, runtimeFindings, selectRuntimeFi
 import { huntPlaybook, reconPlaybook, reportPlaybook, validatePlaybook } from '../skills/playbooks'
 import { tracePaths } from './trace'
 import { similarQuestion } from '../memory-match'
+import { acquireLease, releaseLease, STALL_MS, STALLED_SCANS_SQL } from './lease'
 import { codexClientFor, codexEnvironmentFor } from '../codex/runtime'
 import { environmentsSettingsUrl, taskUrl } from '../codex/cloud'
 import * as CP from '../codex/prompts'
@@ -47,7 +48,6 @@ import {
   memoryHit,
   priorVerdict,
   productForRepo,
-  productRepoIds,
   rememberFacts,
   rememberReviewed,
   rememberVerdict,
@@ -161,7 +161,17 @@ export async function startProductScan(
   trigger: string,
   opts: { repoIds?: number[]; state?: Partial<ScanState>; push?: { repoId: number; commitSha: string | null } } = {},
 ): Promise<{ id: string | null; scanIds: string[] } | null> {
-  const members = await productRepoIds(productId)
+  // Members the user can still scan: repos that left the GitHub App stay in the product for history only.
+  const members = (
+    await all<{ repo_id: number }>(
+      `SELECT pr.repo_id FROM product_repositories pr
+       JOIN user_repositories ur ON ur.repo_id = pr.repo_id AND ur.user_id = ?
+       JOIN repositories r ON r.id = pr.repo_id AND r.removed_at IS NULL
+       WHERE pr.product_id = ?`,
+      userId,
+      productId,
+    )
+  ).map((r) => r.repo_id)
   const repoIds = opts.repoIds ? opts.repoIds.filter((r) => members.includes(r)) : members
   if (!repoIds.length) return null
   const id = uid()
@@ -209,13 +219,31 @@ export async function loadPreferences(userId: string): Promise<Preferences> {
   return parsed.success ? parsed.data : defaultPreferences
 }
 
-/** Executes one step of a scan. Safe to call repeatedly (idempotent per phase). */
+/**
+ * Executes one step of a scan. Safe to call repeatedly and concurrently: a step lease
+ * (./lease.ts) makes a duplicate delivery a no-op while another worker runs the step.
+ */
 export async function runStep(scanId: string): Promise<void> {
+  const leaseId = uid()
+  if (!(await acquireLease(exec, scanId, leaseId, now()))) return // finished, or another worker holds it
+  let next: number | null = null
+  try {
+    next = await leasedStep(scanId, leaseId)
+  } finally {
+    await releaseLease(exec, scanId, leaseId)
+  }
+  // Enqueue only after releasing, so the next step (or the inline fallback) can take the lease.
+  if (next !== null) await enqueue(scanId, next)
+}
+
+/** Runs one step while holding the lease. Returns the delay before the next step, or null when there is none. */
+async function leasedStep(scanId: string, leaseId: string): Promise<number | null> {
   const scan = await first<ScanRow>('SELECT * FROM scans WHERE id = ?', scanId)
-  if (!scan || scan.status === 'completed' || scan.status === 'failed') return
+  if (!scan || scan.status === 'completed' || scan.status === 'failed') return null
   const user = await first<UserRow>('SELECT * FROM users WHERE id = ?', scan.user_id)
   const repo = await getRepo(scan.repo_id)
-  if (!user || !repo) return fail(scan, 'User or repository no longer exists')
+  if (!user || !repo) return fail(scan, leaseId, 'User or repository no longer exists')
+  if (repo.removed_at) return fail(scan, leaseId, `${repo.full_name} was removed from the GitHub App`)
 
   if (scan.status === 'queued') {
     await run(`UPDATE scans SET status = 'running', started_at = ?, updated_at = ? WHERE id = ?`, now(), now(), scan.id)
@@ -243,25 +271,36 @@ export async function runStep(scanId: string): Promise<void> {
       if (mem) ctx.prefs = { ...ctx.prefs, context: [ctx.prefs.context, mem].filter(Boolean).join('\n\n') }
     }
     const result = scan.kind === 'understand' ? await understandStep(ctx) : await securityStep(ctx)
-    await run(
-      `UPDATE scans SET phase = ?, progress = ?, state_json = ?, skills_json = ?, attempts = 0, updated_at = ? WHERE id = ?`,
+    const saved = await exec(
+      `UPDATE scans SET phase = ?, progress = ?, state_json = ?, skills_json = ?, attempts = 0, updated_at = ? WHERE id = ? AND lease_id = ?`,
       result.phase,
       result.progress,
       JSON.stringify(ctx.state),
       JSON.stringify(ctx.state.skills ?? []),
       now(),
       scan.id,
+      leaseId,
     )
-    if (result.phase === 'done') await complete(ctx)
-    else await enqueue(scan.id, result.delay ?? 0)
+    if (!saved) return lostLease(scan)
+    if (result.phase === 'done') {
+      await complete(ctx, leaseId)
+      return null
+    }
+    return result.delay ?? 0
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const attempts = scan.attempts + 1
     await logEvent(scan.id, `Step "${scan.phase}" failed (attempt ${attempts}/${MAX_ATTEMPTS}): ${message.slice(0, 300)}`, 'error')
-    if (attempts >= MAX_ATTEMPTS) return fail(scan, message)
-    await run('UPDATE scans SET attempts = ?, updated_at = ? WHERE id = ?', attempts, now(), scan.id)
-    await enqueue(scan.id, 10 * attempts)
+    if (attempts >= MAX_ATTEMPTS) return fail(scan, leaseId, message)
+    if (!(await exec('UPDATE scans SET attempts = ?, updated_at = ? WHERE id = ? AND lease_id = ?', attempts, now(), scan.id, leaseId))) return lostLease(scan)
+    return 10 * attempts
   }
+}
+
+/** Our lease expired and another worker took the scan over: drop this step's result, the new holder continues. */
+async function lostLease(scan: ScanRow): Promise<null> {
+  await logEvent(scan.id, `Step "${scan.phase}" outlived its lease; its result was discarded`, 'warn')
+  return null
 }
 
 // ---------------------------------------------------------------- internals
@@ -323,24 +362,32 @@ async function logEvent(scanId: string, message: string, level: 'info' | 'warn' 
   await run('INSERT INTO scan_events (scan_id, ts, level, message) VALUES (?, ?, ?, ?)', scanId, now(), level, message)
 }
 
-async function fail(scan: ScanRow, message: string) {
-  await run(
-    `UPDATE scans SET status = 'failed', error = ?, finished_at = ?, updated_at = ? WHERE id = ?`,
+async function fail(scan: ScanRow, leaseId: string, message: string): Promise<null> {
+  const changed = await exec(
+    `UPDATE scans SET status = 'failed', error = ?, finished_at = ?, updated_at = ? WHERE id = ? AND lease_id = ?`,
     message.slice(0, 1000),
     now(),
     now(),
     scan.id,
+    leaseId,
   )
+  if (!changed) return lostLease(scan)
   await logEvent(scan.id, `Scan failed: ${message.slice(0, 300)}`, 'error')
+  return null
 }
 
-async function complete(ctx: StepCtx) {
-  await run(
-    `UPDATE scans SET status = 'completed', progress = 100, finished_at = ?, updated_at = ? WHERE id = ?`,
+async function complete(ctx: StepCtx, leaseId: string) {
+  const changed = await exec(
+    `UPDATE scans SET status = 'completed', progress = 100, finished_at = ?, updated_at = ? WHERE id = ? AND lease_id = ?`,
     now(),
     now(),
     ctx.scan.id,
+    leaseId,
   )
+  if (!changed) {
+    await lostLease(ctx.scan)
+    return
+  }
   await logEvent(ctx.scan.id, 'Done')
   // After the repo is understood, an onboarded user automatically gets their first report.
   if (ctx.scan.kind === 'understand') {
@@ -1191,10 +1238,8 @@ const INTERVAL: Record<string, number> = { daily: 86_400_000, weekly: 7 * 86_400
 
 /** Cron: start recurring reports per user preference + revive stalled scans. */
 export async function scheduledTick(): Promise<void> {
-  const stalled = await all<{ id: string }>(
-    `SELECT id FROM scans WHERE status IN ('queued','running') AND updated_at < ? LIMIT 50`,
-    now() - 10 * 60_000,
-  )
+  // A scan whose step is still running holds a live lease, so it is not re-enqueued.
+  const stalled = await all<{ id: string }>(STALLED_SCANS_SQL, now() - STALL_MS, now())
   for (const s of stalled) await enqueue(s.id)
 
   const users = await all<{ id: string; json: string }>(

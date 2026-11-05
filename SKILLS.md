@@ -40,7 +40,7 @@ understand:     init ──▶ read* ──▶ profile
 
 ### Prior runs (product memory)
 
-Cloudflare's security-audit skill treats prior runs carefully. A prior *confirmed* record carries over only when its source is unchanged. A prior *rejected* record suppresses only the unchanged failed claim, never coverage of the area. openscan's product memory follows the same rule: verdicts and reviewed-file skips are keyed to the file's git blob hash, so any change sends the code back through review and validation. See README → *Products and unified memory*.
+Cloudflare's security-audit skill treats prior runs carefully. A prior *confirmed* record carries over only when its source is unchanged. A prior *rejected* record suppresses only the unchanged failed claim, never coverage of the area. openscan's product memory follows the same rule: verdicts and reviewed-file skips are keyed to the file's git blob hash, so any change sends the code back through review and validation. See docs/TECHNICAL.md → *Products and unified memory*.
 
 ## Validation verdicts in the UI
 
