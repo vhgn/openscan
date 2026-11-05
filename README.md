@@ -1,0 +1,222 @@
+# openscan
+
+**AI security review for your GitHub repositories.** openscan reads your code like an attacker would and briefs you like a CISO: what matters, what is risky, and what to do next. It is not a raw scanner dump.
+
+Built with **TanStack Start** on **Cloudflare Workers**, **D1** (SQLite), and **Queues**. It is installed as a **GitHub App**, and inference runs on the user's own ChatGPT plan through **[login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)** (no API keys).
+
+---
+
+## Which `.md` is for what
+
+| File | What it is | Read it when… |
+| --- | --- | --- |
+| **[README.md](./README.md)** (this file) | How to run locally, deploy, architecture, technical decisions, how coding agents were used | You want to run or change the code |
+| **[TASK.md](./TASK.md)** | The original assignment brief (transcribed from `Agentic_poc.pdf`) plus a table mapping each requirement to where it lives | You want to know what was asked |
+| **[PRODUCT.md](./PRODUCT.md)** | Product spec: audience, required flows, landing page options, preferences, questions model, out of scope | You want to know what we're building and why |
+| [`docs/design/`](./docs/design) | Screenshots of the 3 landing page options on `/design` | Picking a landing page |
+| [`docs/screens/`](./docs/screens) | Screenshots of the onboarding → dashboard → report flow | Quick visual tour |
+| [`.dev.vars.example`](./.dev.vars.example) | Every secret and env var, with comments | Setting up your environment |
+
+---
+
+## Run it locally
+
+### Prerequisites
+
+- Node.js 22+ and npm
+- No Cloudflare account is needed for local dev. `wrangler` and the Vite plugin run D1, Queues and cron locally in `workerd`.
+
+### 1. Quick start (demo mode, no GitHub App, about 3 minutes)
+
+Demo mode signs you in as a fake user and links **public** repositories. It's the fastest way to see the whole flow.
+
+```bash
+npm install
+```
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+Edit `.dev.vars`: set `SESSION_SECRET` and `LWC_SECRET` to random values (`openssl rand -hex 32`) and add `DEV_DEMO_LOGIN=1`. The `GITHUB_*` values can stay as placeholders in demo mode.
+
+```bash
+npm run db:migrate:local
+```
+
+```bash
+npm run dev
+```
+
+Then open:
+
+1. **http://localhost:3000/design**: pick a landing page (sign in first to approve).
+2. **http://localhost:3000/api/dev/login?repos=OWASP/NodeGoat**: demo sign-in with any public repos (comma-separated). It drops you into onboarding.
+3. Select the repo, then either **Login with ChatGPT** (real AI) or **Skip** (deterministic heuristic engine), answer the preference questions, wait for reading, and land on the dashboard.
+
+> Anonymous GitHub API calls are limited to 60/hour per IP. Demo mode falls back to jsDelivr and `raw.githubusercontent.com` for public repos. If you still hit limits, set `GITHUB_PUBLIC_TOKEN` (any read-only token) in `.dev.vars`.
+
+### 2. Full local setup with a real GitHub App
+
+1. **Expose localhost** so GitHub can reach your webhook and callback:
+
+   ```bash
+   npx cloudflared tunnel --url http://localhost:3000
+   ```
+
+   Put the printed `https://….trycloudflare.com` URL in `APP_URL` (in `.dev.vars`; it overrides `wrangler.jsonc`).
+
+2. **Create a GitHub App** at https://github.com/settings/apps/new:
+
+   | Setting | Value |
+   | --- | --- |
+   | Homepage URL | `APP_URL` |
+   | Callback URL | `APP_URL/api/auth/github/callback` |
+   | Expire user authorization tokens | ✅ (refresh tokens are handled) |
+   | Request user authorization (OAuth) during installation | ⬜ leave off (we use the Setup URL) |
+   | Setup URL | `APP_URL/api/github/setup`, with ✅ *Redirect on update* |
+   | Webhook URL | `APP_URL/api/github/webhook` |
+   | Webhook secret | a random string, also set as `GITHUB_WEBHOOK_SECRET` |
+   | Repository permissions | **Contents: Read-only**, **Metadata: Read-only** |
+   | Subscribe to events | **Push** (installation events are always delivered) |
+   | Where can it be installed | Any account |
+
+3. Generate a **private key** and copy the App ID, Client ID and a new Client secret into `.dev.vars`:
+
+   ```
+   GITHUB_APP_ID=…
+   GITHUB_CLIENT_ID=…
+   GITHUB_CLIENT_SECRET=…
+   GITHUB_WEBHOOK_SECRET=…
+   GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----"
+   GITHUB_APP_SLUG=<the app's URL slug>
+   ```
+
+   The PKCS#1 key GitHub gives you works as-is; it's converted to PKCS#8 for WebCrypto at runtime.
+
+4. Remove `DEV_DEMO_LOGIN`, restart `npm run dev`, open `APP_URL`, and click **Connect GitHub**.
+
+### Useful local commands
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev` | Vite + workerd on :3000 (pages, API, queue consumer, D1) |
+| `npm test` | Unit tests (Node's built-in test runner): file ranking, dependency parsing, heuristics, PEM conversion, JSON extraction |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run build` | Production build into `dist/` |
+| `npm run db:migrate:local` | Apply `migrations/*.sql` to the local D1 |
+| `npx wrangler d1 execute openscan --local --command "select * from scans"` | Inspect local data |
+| `curl "http://localhost:3000/cdn-cgi/handler/scheduled"` | Fire the cron (recurring reports + reviving stalled scans) |
+
+---
+
+## Deploy to Cloudflare
+
+```bash
+npx wrangler login
+```
+
+```bash
+npx wrangler d1 create openscan
+```
+
+Paste the printed `database_id` into `wrangler.jsonc`.
+
+```bash
+npx wrangler queues create openscan-jobs
+```
+
+```bash
+npm run db:migrate:remote
+```
+
+Set each secret (you'll be prompted for the value):
+
+```bash
+for s in SESSION_SECRET LWC_SECRET GITHUB_APP_ID GITHUB_CLIENT_ID GITHUB_CLIENT_SECRET GITHUB_WEBHOOK_SECRET GITHUB_APP_PRIVATE_KEY; do npx wrangler secret put $s; done
+```
+
+Set `APP_URL` and `GITHUB_APP_SLUG` in `wrangler.jsonc` `vars` (optionally `ADMIN_GITHUB_LOGINS` so only you can approve a design), then:
+
+```bash
+npm run deploy
+```
+
+Finally, point the GitHub App's URLs at the deployed `APP_URL`. Queues and cron triggers are available on the Workers Free plan.
+
+---
+
+## How it works
+
+```
+                      ┌──────────────────────── Cloudflare Worker (src/server.ts) ───────────────────────┐
+ browser ── HTTPS ──▶ │ fetch: TanStack Start (SSR pages, server fns, /api/*)                             │
+                      │   /api/auth/github/*   GitHub App user OAuth  ──▶ D1 users/sessions              │
+                      │   /api/github/webhook  installation / repos / push ──▶ D1, enqueue scans         │
+                      │   /api/chatgpt/*       login-with-chatgpt handler (D1-backed session store)      │
+                      │   /api/scans[/:id]     REST: start / list / poll scans                           │
+                      │ queue:  one scan STEP per message ──▶ next step re-enqueued                      │
+                      │ cron:   */15 → recurring reports per preference, revive stalled scans            │
+                      └────────────┬───────────────────────────────┬──────────────────────┬──────────────┘
+                                   │ installation token             │ proxyFetch (in-process)│
+                              GitHub REST                    ChatGPT (user's plan)        OSV.dev
+```
+
+### Scan engine (`src/lib/scanner/engine.ts`)
+
+A resumable state machine. **Each queue message runs exactly one step** and stores its state in D1, so every Worker invocation stays short, retries are per step, and the UI gets fine-grained progress for free.
+
+| Kind | Steps | Purpose |
+| --- | --- | --- |
+| `understand` | `init → read* → profile` | Onboarding "AI reads your repo": builds a repo profile (stack, entry points, data stores, auth, sensitive areas) and raises or self-answers questions |
+| `security` | `init → deps → review* → triage` | The report: OSV dependency check, batched code review, then a triage agent that dedupes, ranks, flags false positives, writes *what matters* / *next actions*, and adds PoCs when `depth = deep_poc` |
+
+**Agents** (`src/lib/ai/agents.ts`) are role prompts with zod output schemas: *reader*, *architect*, *reviewer*, *triage lead*. Calls go through the AI SDK (`streamText` + `Output.object`), with a tolerant JSON fallback. Static-analyzer hits are passed to the reviewer as hints to confirm or reject.
+
+**Heuristic engine.** If the user skips ChatGPT, their session expires, or `AI_MODE=heuristic`, the same pipeline runs with deterministic rules (secrets, injection sinks, TLS off, CI risks) plus OSV. Scans never fail just because the AI is unavailable.
+
+### Data model (`migrations/0001_init.sql`)
+
+`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`) · `preferences` · `scans` (status/phase/progress/state/summary) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (approved landing design).
+
+### REST API (cookie-authenticated)
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/api/scans` | `{ repoId, kind?: "security" \| "understand" }` → `202 { id, url }` |
+| `GET` | `/api/scans` | List your scans |
+| `GET` | `/api/scans/:id` | Status, phase, progress, event log, summary, findings, questions |
+| `POST` | `/api/github/webhook` | GitHub App webhook (HMAC-verified) |
+| `*` | `/api/chatgpt/*` | login-with-chatgpt routes (`login`, `status`, `session`, `models`, `responses`, …) |
+
+---
+
+## Technical decisions
+
+- **TanStack Start on Workers.** One deployable gives SSR pages, typed server functions for the UI, and plain API routes for REST and webhooks. The same Worker exports `queue` and `scheduled` handlers (`src/server.ts`), so there's no separate backend to run.
+- **D1 + Queues instead of a long-running job.** Workers are request-scoped, so a repo review is split into small idempotent steps. Steps are retried with backoff, and a cron revives anything stalled for more than 10 minutes.
+- **The GitHub App reads code with installation tokens; user tokens are used only to discover repos.** Background scans never depend on a user being online. User tokens are AES-GCM encrypted at rest and refreshed automatically.
+- **ChatGPT tokens never leave the SDK.** We don't use `dangerouslyGetTokens`. For background scans we store the user's *signed SDK session cookie* (encrypted) and replay it through `auth.proxyFetch()`, which calls the SDK handler in-process. The SDK's own session store is a D1 table, so sessions survive deploys.
+- **Model discovery, not hardcoding.** The model comes from the account's `/models` list via a preference order (`PREFERRED_MODELS`).
+- **Questions are first-class data.** They're deduplicated, capped per repo, answered by the AI with evidence or by the user, and fed into every later scan as known answers.
+- **Bounded context.** Files are ranked for security relevance (`select-files.ts`, unit-tested), truncated per file, and batched by a character budget. Depth preference controls how many files are reviewed.
+- **Real dependency data.** OSV.dev `querybatch` (free, no key) over lockfiles and manifests (npm, PyPI, Go, crates.io, RubyGems).
+- **Graceful degradation everywhere:** heuristic engine without AI, jsDelivr/raw CDN fallback for public demo repos, structured-output → plain-JSON fallback for models.
+
+### Known limitations
+
+- Only some of the end-to-end flow could be verified in the build sandbox. **Verified:** demo login, repo selection, preferences, the understand scan, the security scan with real OSV results, the dashboard, the report, the REST API, cron, the production build, and `wrangler deploy --dry-run`. The ChatGPT SDK worked up to OpenAI's device-code step. **Not verified (needs real accounts):** the ChatGPT device-login approval and AI-mode scans, GitHub App install/OAuth, and webhooks.
+- Large monorepos: only the top-ranked files are reviewed (30 to 50 per scan by depth). Truncated trees are noted in scan state.
+- Dependency findings are not reachability-checked yet. The AI triage and the user's context calibrate their severity.
+
+---
+
+## How coding agents were used
+
+This POC was built with **Claude Code** as a pair programmer, in a single session:
+
+1. **Brief → spec.** The agent read the assignment PDF and the product owner's notes and turned them into `TASK.md` and `PRODUCT.md`.
+2. **Research before code.** It cloned `opencoredev/login-with-chatgpt` and read its docs, skill file and source (`proxyFetch`, session store, request normalization). That's how it arrived at the "replay the signed cookie through `proxyFetch`" approach for background inference without exporting tokens. It scaffolded TanStack Start with `create-cloudflare` to get the canonical Workers setup.
+3. **Design loop with the owner.** It built the three `/design` options and screenshotted them with Playwright. After feedback it replaced option C with a more offensive-security style for CTOs and team leads, and renamed the product to *openscan*.
+4. **Verification.** `tsc`, unit tests (which caught a real ranking bug: test files outranked application code), a production build plus `wrangler deploy --dry-run`, and a Playwright-driven end-to-end run of onboarding → reading → report (screenshots in `docs/screens/`). Runtime issues found this way and fixed: a duplicate React instance during SSR dep optimization, a hydration mismatch, and GitHub anonymous rate limits.
+5. **Human in the loop.** The product owner made the product decisions (flow, audience, naming, design choice). Anything needing real credentials (GitHub App, ChatGPT) is documented above rather than faked.

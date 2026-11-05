@@ -1,0 +1,58 @@
+/**
+ * Cloudflare Worker configuration for openscan.
+ * Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+ *
+ * Secrets (set with `wrangler secret put NAME`, or in .dev.vars locally):
+ *   SESSION_SECRET, LWC_SECRET,
+ *   GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_WEBHOOK_SECRET
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "openscan",
+	"compatibility_date": "2025-09-02",
+	"compatibility_flags": ["nodejs_compat"],
+	// Custom entry: TanStack Start fetch handler + queue consumer + cron.
+	"main": "src/server.ts",
+	"observability": { "enabled": true },
+	"upload_source_maps": true,
+
+	"vars": {
+		// Public URL of the app (used for OAuth callbacks and server-side AI proxy calls).
+		"APP_URL": "http://localhost:3000",
+		// The slug of your GitHub App: https://github.com/apps/<slug>
+		"GITHUB_APP_SLUG": "openscan",
+		// "auto" = use the user's ChatGPT session, fall back to heuristics when not linked.
+		// "heuristic" = never call an LLM (deterministic, offline-friendly demo mode).
+		"AI_MODE": "auto",
+		// Comma-separated GitHub logins allowed to approve a landing design on /design.
+		// Empty = anyone signed in may approve (fine for local dev).
+		"ADMIN_GITHUB_LOGINS": "",
+		// "1" enables /api/dev/login (fake GitHub user + public repos). Never enable in production.
+		"DEV_DEMO_LOGIN": "0"
+	},
+
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "openscan",
+			// Replace with the id printed by `wrangler d1 create openscan` before deploying.
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "migrations"
+		}
+	],
+
+	"queues": {
+		"producers": [{ "binding": "JOBS", "queue": "openscan-jobs" }],
+		"consumers": [
+			{
+				"queue": "openscan-jobs",
+				"max_batch_size": 1,
+				"max_batch_timeout": 1,
+				"max_retries": 3
+			}
+		]
+	},
+
+	// Every 15 minutes: schedule recurring reports + revive stalled scans.
+	"triggers": { "crons": ["*/15 * * * *"] }
+}

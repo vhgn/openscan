@@ -1,0 +1,21 @@
+# Copy to .dev.vars for local development (never commit .dev.vars).
+# Generate secrets with: openssl rand -hex 32
+SESSION_SECRET=replace-me-with-64-hex-chars
+LWC_SECRET=replace-me-with-64-hex-chars
+
+# GitHub App (https://github.com/settings/apps/new) — see README.md
+GITHUB_APP_ID=123456
+GITHUB_CLIENT_ID=Iv23liXXXXXXXXXXXXXX
+GITHUB_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+GITHUB_WEBHOOK_SECRET=replace-me
+# Paste the PEM with literal \n line breaks, or as a quoted multi-line value.
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
+
+# Optional overrides of wrangler.jsonc vars
+# GITHUB_APP_SLUG=my-openscan
+# DEV_DEMO_LOGIN=1
+# AI_MODE=heuristic
+
+# Optional, dev only: a personal token used for *public* demo repos (DEV_DEMO_LOGIN=1)
+# to avoid GitHub's 60 requests/hour anonymous limit. Read-only public access is enough.
+# GITHUB_PUBLIC_TOKEN=

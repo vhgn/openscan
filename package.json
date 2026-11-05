@@ -1,0 +1,43 @@
+{
+  "name": "openscan",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#/*": "./src/*"
+  },
+  "scripts": {
+    "dev": "vite dev --port 3000",
+    "build": "vite build",
+    "preview": "npm run build && vite preview",
+    "deploy": "npm run build && wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --no-warnings --test tests/*.test.ts",
+    "cf-typegen": "wrangler types",
+    "db:migrate:local": "wrangler d1 migrations apply openscan --local",
+    "db:migrate:remote": "wrangler d1 migrations apply openscan --remote"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^4.0.109",
+    "@opencoredev/loginwithchatgpt-ai": "^0.2.0",
+    "@opencoredev/loginwithchatgpt-react": "^0.2.0",
+    "@opencoredev/loginwithchatgpt-server": "^0.2.0",
+    "@tailwindcss/vite": "^4.1.18",
+    "@tanstack/react-router": "1.170.46",
+    "@tanstack/react-start": "1.169.4",
+    "ai": "^7.0.163",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.18",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.26.0",
+    "@types/node": "^22.20.5",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.0",
+    "wrangler": "^4.157.0"
+  }
+}
