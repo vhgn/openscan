@@ -187,6 +187,8 @@ Finally, point the GitHub App's URLs at the deployed `APP_URL`. Queues and cron 
                       │   /api/github/webhook  installation / repos / push ──▶ D1, enqueue scans         │
                       │   /api/chatgpt/*       login-with-chatgpt handler (D1-backed session store)      │
                       │   /api/scans[/:id]     REST: start / list / poll scans                           │
+                      │   /mcp                 MCP server (Bearer token) ──▶ same read models/actions    │
+                      │   /oauth/*, /.well-known/oauth-*  OAuth 2.1 server for MCP clients ──▶ D1        │
                       │ queue:  one scan STEP per message ──▶ next step re-enqueued                      │
                       │ cron:   */15 → recurring reports per preference, revive stalled scans            │
                       └────────────┬───────────────────────────────┬──────────────────────┬──────────────┘
@@ -233,7 +235,7 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 
 ### Data model (`migrations/0001_init.sql`)
 
-`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` · `memory` · `preferences` · `scans` (status/phase/progress/state/summary/skills/Codex tasks/product/run) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
+`users` · `sessions` · `oauth_clients` · `oauth_requests` · `oauth_codes` · `oauth_grants` · `oauth_tokens` (MCP OAuth, `0005_mcp_oauth.sql`) · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` · `memory` · `preferences` · `scans` (status/phase/progress/state/summary/skills/Codex tasks/product/run) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
 
 ### REST API (cookie-authenticated)
 
@@ -244,6 +246,42 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 | `GET` | `/api/scans/:id` | Status, phase, progress, event log, summary, findings, questions |
 | `POST` | `/api/github/webhook` | GitHub App webhook (HMAC-verified) |
 | `*` | `/api/chatgpt/*` | login-with-chatgpt routes (`login`, `status`, `session`, `models`, `responses`, …) |
+
+### MCP server (OAuth)
+
+openscan is also an **MCP server** at `APP_URL/mcp`, so Claude, Cursor, VS Code or any MCP client can read your briefs and act on them. Add the URL as a remote (Streamable HTTP) server; the client discovers the OAuth server, registers itself, and opens a browser where you sign in with GitHub and approve the connection. No API keys.
+
+```bash
+claude mcp add --transport http openscan https://openscan.<subdomain>.workers.dev/mcp
+```
+
+| Tool | Scope | What it does |
+| --- | --- | --- |
+| `list_repositories` | read | Linked repos, whether watched, product, latest security report |
+| `get_repository` | read | The AI-built repo profile (stack, entry points, data stores, auth, sensitive areas) |
+| `list_scans` | read | Recent scans, optionally for one repo |
+| `get_scan` | read | Status/progress, or the full report: risk, what matters, next actions, findings, questions |
+| `list_findings` | read | Open findings of the latest report per repo, filtered by repo and minimum severity |
+| `list_questions` | read | The reviewer's open (or answered) questions |
+| `start_scan` | write | Queue a security report or a fresh repo read |
+| `answer_question` | write | Answer a question; it becomes product memory |
+| `update_finding_status` | write | Mark a finding fixed, dismissed, or open again |
+
+Write tools are only listed when the token carries `openscan:write`. The server is stateless (one JSON-RPC exchange per POST, JSON responses), which suits Workers.
+
+The OAuth 2.1 authorization server (`src/lib/oauth/`) implements what the [MCP authorization spec](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization) asks for:
+
+| Endpoint | Standard |
+| --- | --- |
+| `GET /.well-known/oauth-protected-resource[/mcp]` | RFC 9728 protected resource metadata (also advertised in the `401` `WWW-Authenticate` header) |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 authorization server metadata |
+| `POST /oauth/register` | RFC 7591 dynamic client registration (public or confidential clients) |
+| `client_id` = https URL | Client ID Metadata Documents (fetched, validated, cached for an hour) |
+| `GET/POST /oauth/authorize` | Authorization code with **PKCE S256 required**, consent page, `iss` in the response (RFC 9207) |
+| `POST /oauth/token` | `authorization_code` and `refresh_token` (rotated on every use; scope may be narrowed) |
+| `POST /oauth/revoke` | RFC 7009; revoking a refresh token disconnects the client |
+
+Security notes: tokens are bound to `APP_URL/mcp` (RFC 8707 `resource`); codes, tokens and client secrets are stored as SHA-256 hashes; codes and consent requests are single-use (`DELETE … RETURNING`); redirect URIs must be https, loopback http (any port, RFC 8252) or a private-use scheme, and are matched exactly; the consent page can't be framed and rejects cross-origin posts. Access tokens live 1 hour, refresh tokens 30 days. The cron purges expired rows. Users see and disconnect clients under **Settings → MCP**. Because metadata uses `APP_URL` as the issuer, set it to the public URL clients will use.
 
 ---
 

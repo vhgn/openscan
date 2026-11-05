@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 import { userFromRequest } from '#/lib/session'
-import { first } from '#/lib/db'
 import { listScans } from '#/lib/queries'
-import { createScan } from '#/lib/scanner/engine'
+import { startScanFor } from '#/lib/actions'
 
 const body = z.object({ repoId: z.number().int(), kind: z.enum(['understand', 'security']).default('security') })
 
@@ -21,9 +20,8 @@ export const Route = createFileRoute('/api/scans/')({
         if (!user) return Response.json({ error: 'unauthenticated' }, { status: 401 })
         const parsed = body.safeParse(await request.json().catch(() => ({})))
         if (!parsed.success) return Response.json({ error: 'invalid_body', issues: parsed.error.issues }, { status: 400 })
-        const link = await first('SELECT 1 FROM user_repositories WHERE user_id = ? AND repo_id = ?', user.id, parsed.data.repoId)
-        if (!link) return Response.json({ error: 'repo_not_found' }, { status: 404 })
-        const id = await createScan(user.id, parsed.data.repoId, parsed.data.kind, 'manual')
+        const id = await startScanFor(user.id, parsed.data.repoId, parsed.data.kind)
+        if (!id) return Response.json({ error: 'repo_not_found' }, { status: 404 })
         return Response.json({ id, url: `/scans/${id}` }, { status: 202 })
       },
     },

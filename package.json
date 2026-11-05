@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.109",
+    "@cfworker/json-schema": "^4.1.6",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@opencoredev/loginwithchatgpt-ai": "^0.2.0",
     "@opencoredev/loginwithchatgpt-react": "^0.2.0",
     "@opencoredev/loginwithchatgpt-server": "^0.2.0",

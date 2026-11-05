@@ -1,15 +1,15 @@
 import { createFileRoute, Link, redirect, useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
-import { Lede, Margin, Page, SectionHead, Title, plural } from '#/components/ui'
+import { Lede, Margin, Page, SectionHead, Title, plural, timeAgo } from '#/components/ui'
 import { ChatGPTConnect } from '#/components/ChatGPTConnect'
 import { PreferencesForm } from '#/components/PreferencesForm'
-import { disconnectChatGPT, getOnboarding, refreshCodexEnvironments, savePreferences } from '#/server-fns/app'
+import { disconnectChatGPT, getMcpConnections, getOnboarding, refreshCodexEnvironments, revokeMcpConnectionFn, savePreferences } from '#/server-fns/app'
 
 export const Route = createFileRoute('/settings')({
   loader: async () => {
-    const data = await getOnboarding()
+    const [data, mcp] = await Promise.all([getOnboarding(), getMcpConnections()])
     if (data.step !== 'done') throw redirect({ to: '/home' })
-    return data
+    return { ...data, mcp }
   },
   head: () => ({ meta: [{ title: 'Settings — openscan' }] }),
   component: Settings,
@@ -111,6 +111,46 @@ function Settings() {
             {note && <span>{note}</span>}
           </p>
         </>
+      )}
+
+      <SectionHead>MCP</SectionHead>
+      <div className="relative mt-4">
+        <p className="text-[17px] leading-[1.6] text-ink-3">
+          Use openscan from Claude, Cursor or any MCP client: add this server URL, then sign in when the client asks.
+        </p>
+        <p className="mt-3">
+          <code className="rounded bg-wash px-2 py-1 font-mono text-[14px]">{data.mcp.mcpUrl}</code>
+        </p>
+        <Margin>Clients connect with OAuth. They never see your GitHub or ChatGPT credentials.</Margin>
+      </div>
+      {data.mcp.connections.length ? (
+        <ul className="mt-5 border-y border-rule">
+          {data.mcp.connections.map((c) => (
+            <li key={c.id} className="flex items-baseline justify-between gap-4 border-t border-rule py-2.5 first:border-t-0">
+              <span className="min-w-0">
+                <span className="text-[17px]">{c.clientName}</span>
+                <span className="ml-3 font-sans text-[12.5px] text-muted">
+                  {c.scopes.includes('openscan:write') ? 'read & write' : 'read only'} · {c.lastUsedAt ? `used ${timeAgo(c.lastUsedAt)}` : `connected ${timeAgo(c.createdAt)}`}
+                </span>
+              </span>
+              <button
+                className="shrink-0 font-sans text-[13px] text-muted underline underline-offset-4 hover:text-ink"
+                disabled={busy !== null}
+                onClick={async () => {
+                  if (!confirm(`Disconnect ${c.clientName}? It will have to sign in again.`)) return
+                  setBusy(`mcp:${c.id}`)
+                  await revokeMcpConnectionFn({ data: { id: c.id } })
+                  await router.invalidate()
+                  setBusy(null)
+                }}
+              >
+                {busy === `mcp:${c.id}` ? 'Disconnecting…' : 'Disconnect'}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-4 font-sans text-[13px] text-muted">No clients connected.</p>
       )}
 
       <SectionHead>The brief</SectionHead>

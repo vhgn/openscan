@@ -20,13 +20,13 @@ import {
   listMemory,
   listProducts,
   memoryStats,
-  productForRepo,
   productRepoIds,
-  rememberFacts,
   saveProduct,
 } from '#/lib/products'
 import { uid } from '#/lib/db'
-import { isDemoLoginEnabled } from '#/lib/env'
+import { answerQuestionFor, setFindingStatus, startScanFor } from '#/lib/actions'
+import { listMcpConnections, revokeMcpConnection } from '#/lib/oauth/server'
+import { appUrl, isDemoLoginEnabled } from '#/lib/env'
 import { preferencesSchema, type OnboardingStep, type UserRow } from '#/lib/types'
 
 function publicUser(u: UserRow) {
@@ -196,17 +196,7 @@ export const answerQuestion = createServerFn({ method: 'POST' })
   .validator(z.object({ id: z.string(), answer: z.string().min(1).max(4000) }))
   .handler(async ({ data }) => {
     const user = await requireUser()
-    await run(
-      `UPDATE questions SET status = 'answered', answer = ?, answer_source = 'user', answered_at = ? WHERE id = ? AND user_id = ?`,
-      data.answer,
-      now(),
-      data.id,
-      user.id,
-    )
-    // Owner answers become product memory facts, visible to every agent in the product.
-    const q = await first<{ question: string; repo_id: number | null; product_id: string | null }>('SELECT question, repo_id, product_id FROM questions WHERE id = ?', data.id)
-    const productId = q?.product_id ?? (q?.repo_id ? (await productForRepo(user.id, q.repo_id))?.id : null)
-    if (q && productId) await rememberFacts(productId, null, null, [{ text: `Owner: ${q.question} → ${data.answer}`, evidence: 'answered by the owner' }])
+    await answerQuestionFor(user.id, data.id, data.answer)
     return { ok: true }
   })
 
@@ -262,16 +252,16 @@ export const startScan = createServerFn({ method: 'POST' })
   .validator(z.object({ repoId: z.number().int(), kind: z.enum(['understand', 'security']).default('security') }))
   .handler(async ({ data }) => {
     const user = await requireUser()
-    const link = await first('SELECT 1 FROM user_repositories WHERE user_id = ? AND repo_id = ?', user.id, data.repoId)
-    if (!link) throw new Error('Repository not linked')
-    return { id: await createScan(user.id, data.repoId, data.kind, 'manual') }
+    const id = await startScanFor(user.id, data.repoId, data.kind)
+    if (!id) throw new Error('Repository not linked')
+    return { id }
   })
 
 export const updateFindingStatus = createServerFn({ method: 'POST' })
   .validator(z.object({ id: z.string(), status: z.enum(['open', 'dismissed', 'fixed']) }))
   .handler(async ({ data }) => {
     const user = await requireUser()
-    await run('UPDATE findings SET status = ? WHERE id = ? AND user_id = ?', data.status, data.id, user.id)
+    await setFindingStatus(user.id, data.id, data.status)
     return { ok: true }
   })
 
@@ -349,5 +339,20 @@ export const forgetMemoryFn = createServerFn({ method: 'POST' })
     const user = await requireUser()
     if (!(await getProduct(user.id, data.productId))) throw new Error('Product not found')
     await forgetMemory(data.productId, data.memoryId, data.kind)
+    return { ok: true }
+  })
+
+// ------------------------------------------------------------------ MCP connections
+
+export const getMcpConnections = createServerFn({ method: 'GET' }).handler(async () => {
+  const user = await requireUser()
+  return { mcpUrl: `${appUrl()}/mcp`, connections: await listMcpConnections(user.id) }
+})
+
+export const revokeMcpConnectionFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ id: z.string() }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    await revokeMcpConnection(user.id, data.id)
     return { ok: true }
   })
