@@ -1,8 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { str } from '#/lib/env'
 import { hmacSha256Hex, timingSafeEqual } from '#/lib/crypto'
-import { all, batch, now, run } from '#/lib/db'
+import { all, batch, now } from '#/lib/db'
 import { repoUpsert, upsertInstallation, type GhInstallation, type GhRepo } from '#/lib/github/repos'
+import { detachInstallationOps, detachReposOps } from '#/lib/github/detach'
 import { createScan, loadPreferences } from '#/lib/scanner/engine'
 
 /** GitHub App webhook: keeps installations/repos in sync and triggers on-push reports. */
@@ -22,8 +23,8 @@ export const Route = createFileRoute('/api/github/webhook')({
         if (event === 'installation') {
           const inst = payload.installation as GhInstallation
           if (payload.action === 'deleted') {
-            await run('DELETE FROM installations WHERE id = ?', inst.id)
-            await run('DELETE FROM repositories WHERE installation_id = ?', inst.id)
+            // Keep the repositories rows: deleting them would cascade into the users' scan history.
+            await batch(detachInstallationOps(inst.id, now()))
           } else {
             await upsertInstallation(inst)
             const repos = (payload.repositories ?? []) as Array<Pick<GhRepo, 'id' | 'full_name' | 'private'>>
@@ -44,7 +45,11 @@ export const Route = createFileRoute('/api/github/webhook')({
                SELECT user_id, ?, 0, ? FROM user_installations WHERE installation_id = ?`,
               [r.id, now(), instId],
             ]),
-            ...removed.map((r): [string, Array<string | number | null>] => ['DELETE FROM repositories WHERE id = ?', [r.id]]),
+            // Unlink instead of deleting, so the users' scans and findings for these repos survive.
+            ...detachReposOps(
+              removed.map((r) => r.id),
+              now(),
+            ),
           ])
         }
 

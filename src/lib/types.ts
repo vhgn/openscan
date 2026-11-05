@@ -51,6 +51,8 @@ export interface RepoRow {
   language: string | null
   profile_json: string | null
   understood_at: number | null
+  /** Set when the repo was removed from the GitHub App; the row stays so scan history survives. */
+  removed_at: number | null
 }
 
 export type ScanKind = 'understand' | 'security'
@@ -76,6 +78,9 @@ export interface ScanRow {
   updated_at: number
   started_at: number | null
   finished_at: number | null
+  /** Step lease (src/lib/scanner/lease.ts): who is running a step and until when. */
+  lease_id: string | null
+  lease_until: number | null
 }
 
 export interface RepoProfile {

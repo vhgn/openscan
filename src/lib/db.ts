@@ -19,6 +19,12 @@ export async function run(sql: string, ...params: Param[]): Promise<void> {
   await stmt(sql, params).run()
 }
 
+/** Like run(), but returns how many rows changed (for conditional updates such as leases). */
+export async function exec(sql: string, ...params: Param[]): Promise<number> {
+  const res = await stmt(sql, params).run()
+  return res.meta?.changes ?? 0
+}
+
 export async function batch(items: Array<[string, Param[]]>): Promise<void> {
   if (!items.length) return
   const db = env().DB

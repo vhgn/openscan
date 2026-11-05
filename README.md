@@ -292,9 +292,13 @@ sequenceDiagram
 
     Q->>W: message with scanId (batch size 1)
     W->>E: runStep(scanId)
-    E->>D: load scan, user and repo
-    alt scan missing, completed or failed
+    E->>D: take the step lease (conditional UPDATE of lease_id, lease_until)
+    alt scan finished, or another worker holds a live lease
         E-->>W: return without doing anything
+    end
+    E->>D: load scan, user and repo
+    alt repo missing or removed from the GitHub App
+        E->>D: mark failed
     end
     E->>D: if queued, mark running
     E->>D: load preferences
@@ -306,7 +310,7 @@ sequenceDiagram
     end
     E->>X: run the step for scan.phase
     X-->>E: next phase, progress, optional delay
-    E->>D: save phase, progress, state_json and skills, reset attempts
+    E->>D: save phase, progress, state_json and skills, reset attempts (only while holding the lease)
     alt next phase is done
         E->>D: mark completed
         E->>E: a finished understand scan starts the first security scan
@@ -327,7 +331,11 @@ sequenceDiagram
     Note over W: If runStep itself crashes, the message is retried after 15s
 ```
 
-Each state below is `scans.phase`. A self-loop is one more queue message for the same phase (the next file batch, the next two findings to validate, or another Codex poll). If a step throws, the same phase is retried after 10 s × attempt; after 3 attempts the scan is marked `failed`. The cron also re-enqueues any queued or running scan with no update in 10 minutes.
+Each state below is `scans.phase`. A self-loop is one more queue message for the same phase (the next file batch, the next two findings to validate, or another Codex poll). If a step throws, the same phase is retried after 10 s × attempt; after 3 attempts the scan is marked `failed`. The cron also re-enqueues any queued or running scan with no update in 10 minutes, unless a step still holds a live lease.
+
+Each step runs under a lease (`scans.lease_id`, `lease_until`, see `src/lib/scanner/lease.ts`), so a duplicate queue message or a cron revival never runs the same step twice at once. The lease lasts 15 minutes, the longest a queue consumer may run. The step's writes are fenced on `lease_id`, and the lease is released before the next step is enqueued. A worker that dies leaves an expired lease, which the next delivery takes over.
+
+When a repository is removed from the GitHub App (or the app is uninstalled), its `repositories` row is kept and marked `removed_at`, and users are unlinked from it. Deleting the row would cascade into the user's scans, findings and questions, so a database trigger refuses to delete a repository that has scans. Granting the repository again clears `removed_at`.
 
 **`understand`**
 
@@ -509,6 +517,7 @@ erDiagram
         TEXT default_branch
         TEXT profile_json "AI repo profile"
         INTEGER understood_at
+        INTEGER removed_at "left the GitHub App; history kept"
     }
     USER_REPOSITORIES {
         TEXT user_id PK
@@ -550,6 +559,8 @@ erDiagram
         TEXT product_id
         TEXT run_id "groups a product scan"
         INTEGER attempts
+        TEXT lease_id "worker running the current step"
+        INTEGER lease_until
     }
     SCAN_EVENTS {
         INTEGER id PK
