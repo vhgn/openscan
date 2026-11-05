@@ -128,13 +128,26 @@ export async function deleteProduct(userId: string, productId: string) {
 }
 
 /** Ensures every selected repo belongs to some product (onboarding default product). */
-export async function ensureDefaultProduct(userId: string, name: string, repoIds: number[]): Promise<string> {
-  const existing = await first<{ id: string }>('SELECT id FROM products WHERE user_id = ? ORDER BY created_at LIMIT 1', userId)
+/**
+ * Puts repos that have no product yet into the user's first product, creating it as `name` if
+ * the user has none. The existing product keeps its name and description unless `rename` is set
+ * (onboarding, where the user typed the product name); scanning some other repo must not rename it.
+ */
+export async function ensureDefaultProduct(userId: string, name: string, repoIds: number[], opts: { rename?: boolean } = {}): Promise<string> {
+  const existing = await first<{ id: string; name: string; description: string | null }>(
+    'SELECT id, name, description FROM products WHERE user_id = ? ORDER BY created_at LIMIT 1',
+    userId,
+  )
   if (!existing) return saveProduct(userId, { name, repoIds })
   const current = await productRepoIds(existing.id)
   const orphan = []
   for (const r of repoIds) if (!(await productForRepo(userId, r))) orphan.push(r)
-  await saveProduct(userId, { id: existing.id, name, repoIds: [...new Set([...current, ...orphan])] })
+  await saveProduct(userId, {
+    id: existing.id,
+    name: opts.rename ? name : existing.name,
+    description: existing.description,
+    repoIds: [...new Set([...current, ...orphan])],
+  })
   return existing.id
 }
 

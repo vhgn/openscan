@@ -140,7 +140,6 @@ test('findings are fingerprinted per scan: a rerun of the same step adds no dupl
 
 test(
   'scanning a repository outside any product keeps the existing product intact',
-  { todo: 'BUG: ensureDefaultProduct (src/lib/products.ts) calls saveProduct with the existing product id, so the user\'s first product is renamed to the repo owner and its description cleared; reached from runStep and from startScanFor via productIdForRepo (src/lib/scanner/engine.ts)' },
   async () => {
     const user = insertUser(t)
     insertRepo(t, { id: 1, fullName: 'acme/shop', users: [{ id: user }] })

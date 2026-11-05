@@ -128,7 +128,7 @@ export const saveRepoSelection = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const user = await requireUser()
     // Selected repositories form (or join) the user's product so they share one memory.
-    await ensureDefaultProduct(user.id, data.productName ?? 'My product', data.repoIds)
+    await ensureDefaultProduct(user.id, data.productName ?? 'My product', data.repoIds, { rename: data.productName !== undefined })
     await batch([
       ['UPDATE user_repositories SET selected = 0 WHERE user_id = ?', [user.id]],
       ...data.repoIds.map((id): [string, Array<string | number | null>] => ['UPDATE user_repositories SET selected = 1 WHERE user_id = ? AND repo_id = ?', [user.id, id]]),
