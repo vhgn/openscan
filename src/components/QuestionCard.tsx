@@ -81,10 +81,9 @@ export function QuestionCard({ q, compact = false }: { q: QuestionLike; compact?
 }
 
 /**
- * A stack of question cards. Each card is kept tight inside; a hairline and
- * generous space between cards make it obvious where one question ends.
+ * A stack of question cards. Each card is kept tight inside; generous space
+ * between cards makes it obvious where one question ends.
  */
 export function QuestionList({ children, compact = false, className = '' }: { children: ReactNode; compact?: boolean; className?: string }) {
-  const gap = compact ? '[&>*]:py-5' : '[&>*]:py-7'
-  return <div className={`divide-y divide-rule ${gap} [&>*:first-child]:pt-0 [&>*:last-child]:pb-0 ${className}`}>{children}</div>
+  return <div className={`${compact ? 'space-y-8' : 'space-y-12'} ${className}`}>{children}</div>
 }

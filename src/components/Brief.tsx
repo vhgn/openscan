@@ -123,8 +123,8 @@ export function Brief({ data }: { data: DashboardData }) {
         {visible.length === 0 && <Empty>No open findings.</Empty>}
         {visible.length > 0 && findings.length === 0 && <Empty>No open findings match these filters.</Empty>}
         {findings.map((f) => (
-          <li key={f.id} className="border-t border-rule first:border-t-0">
-            <Link to="/scans/$scanId" params={{ scanId: f.scan_id }} hash={`f-${f.id}`} className="group grid gap-1 py-5 sm:grid-cols-[6.5rem_1fr] sm:gap-4">
+          <li key={f.id}>
+            <Link to="/scans/$scanId" params={{ scanId: f.scan_id }} hash={`f-${f.id}`} className="group grid gap-1 py-3.5 sm:grid-cols-[6.5rem_1fr] sm:gap-4">
               <span className="pt-1">
                 <Severity severity={f.severity} />
               </span>
@@ -156,10 +156,10 @@ export function Brief({ data }: { data: DashboardData }) {
       >
         Products
       </SectionHead>
-      <div className="mt-5 space-y-7">
+      <div className="mt-5 space-y-12">
         {data.products.length === 0 && <Empty>No products yet.</Empty>}
         {data.products.map((p) => (
-          <div key={p.id} className="relative border-t border-rule pt-7 first:border-t-0 first:pt-0">
+          <div key={p.id} className="relative">
             <Link to="/products/$productId" params={{ productId: p.id }} className="font-display text-[28px] leading-tight hover:underline hover:decoration-1 hover:underline-offset-4">
               {p.name}
             </Link>
@@ -191,8 +191,8 @@ export function Brief({ data }: { data: DashboardData }) {
       <ol className="mt-4">
         {data.scans.length === 0 && <Empty>No scans yet.</Empty>}
         {data.scans.map((s) => (
-          <li key={s.id} className="border-t border-rule first:border-t-0">
-            <Link to="/scans/$scanId" params={{ scanId: s.id }} className="group grid gap-1 py-4 sm:grid-cols-[6.5rem_1fr_auto] sm:items-baseline sm:gap-4">
+          <li key={s.id}>
+            <Link to="/scans/$scanId" params={{ scanId: s.id }} className="group grid gap-1 py-3.5 sm:grid-cols-[6.5rem_1fr_auto] sm:items-baseline sm:gap-4">
               <span className="flex items-center gap-2 font-sans text-[12.5px] text-muted">
                 <StatusMark status={s.status} />
                 {s.status === 'running' || s.status === 'queued' ? `${s.progress}%` : timeAgo(s.finished_at ?? s.created_at)}
