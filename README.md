@@ -206,7 +206,9 @@ The Codex client (`src/lib/codex/cloud.ts`) uses the same ChatGPT backend endpoi
 
 ### Products and unified memory (`src/lib/products.ts`)
 
-A **product** is a named group of repositories (for example `api` + `web` + `infra`). Each repo belongs to one product per user. Onboarding creates the first product. More can be created on `/products/new`, and **Scan product** scans every repo in it as one run (`scans.run_id`). Questions and answers are shared across the product, so the AI never asks the same thing per repo.
+A **product** is a named group of repositories (for example `api` + `web` + `infra`). Each repo belongs to one product per user. Onboarding creates the first product. More can be created on `/products/new`. Questions and answers are shared across the product, so the AI never asks the same thing per repo.
+
+**Products own scans.** A review is a **product scan** (table `product_scans`), and it owns one repository scan per member repo (`scans.product_scan_id`). The brief's *Run a fresh review of …* picker lists products, scheduled reports run once per product, and the onboarding report is the product's first review. Each member repo has a **scan on push** switch (`product_repositories.scan_on_push`, on the product page): a push to its default branch starts a product scan with a differential review of only that repo; its siblings reach the agents through product memory. Choosing *On every push* in preferences turns the switch on for every repo, and moving away from it turns them all off. `POST /api/scans {productId}` reviews a product; `{repoId}` reviews one repo inside its product.
 
 Every product has one **memory** (table `memory`), so agents don't re-check the same things:
 
@@ -233,7 +235,7 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 
 ### Data model (`migrations/0001_init.sql`)
 
-`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` · `memory` · `preferences` · `scans` (status/phase/progress/state/summary/skills/Codex tasks/product/run) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
+`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` (`scan_on_push`) · `product_scans` (one review of a product: trigger, pushed repo and commit) · `memory` · `preferences` · `scans` (one repository job: status/phase/progress/state/summary/skills/Codex tasks/product/product scan) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
 
 ### REST API (cookie-authenticated)
 

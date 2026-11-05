@@ -3,7 +3,7 @@ import { str } from '#/lib/env'
 import { hmacSha256Hex, timingSafeEqual } from '#/lib/crypto'
 import { all, batch, now, run } from '#/lib/db'
 import { repoUpsert, upsertInstallation, type GhInstallation, type GhRepo } from '#/lib/github/repos'
-import { createScan, loadPreferences } from '#/lib/scanner/engine'
+import { startProductScan } from '#/lib/scanner/engine'
 
 /** GitHub App webhook: keeps installations/repos in sync and triggers on-push reports. */
 export const Route = createFileRoute('/api/github/webhook')({
@@ -49,16 +49,23 @@ export const Route = createFileRoute('/api/github/webhook')({
         }
 
         if (event === 'push' && payload.ref === `refs/heads/${payload.repository?.default_branch}`) {
-          const watchers = await all<{ user_id: string }>(
-            'SELECT user_id FROM user_repositories WHERE repo_id = ? AND selected = 1',
-            payload.repository.id,
+          const repoId = payload.repository.id as number
+          // Products own scans: a push starts a review of each product that opted this repo in.
+          const products = await all<{ product_id: string; user_id: string }>(
+            `SELECT p.id AS product_id, p.user_id FROM product_repositories pr
+             JOIN products p ON p.id = pr.product_id
+             JOIN user_repositories ur ON ur.user_id = p.user_id AND ur.repo_id = pr.repo_id AND ur.selected = 1
+             WHERE pr.repo_id = ? AND pr.scan_on_push = 1`,
+            repoId,
           )
-          for (const w of watchers) {
-            const prefs = await loadPreferences(w.user_id)
+          for (const p of products) {
+            // Only the pushed repo is re-scanned; its siblings come in through product memory.
             // Differential review (Trail of Bits differential-review): the range drives file priority.
-            if (prefs.frequency === 'on_push') {
-              await createScan(w.user_id, payload.repository.id, 'security', 'push', { diff: { base: payload.before, head: payload.after } })
-            }
+            await startProductScan(p.user_id, p.product_id, 'push', {
+              repoIds: [repoId],
+              state: { diff: { base: payload.before, head: payload.after } },
+              push: { repoId, commitSha: payload.after ?? null },
+            })
           }
         }
         return new Response('ok')

@@ -54,7 +54,7 @@ Asked during onboarding and editable any time on `/settings`.
 
 | Preference | Values | Effect |
 | --- | --- | --- |
-| `frequency` | on_push · daily · weekly · monthly · manual | Cron and webhook scheduling of security reports |
+| `frequency` | on_push · daily · weekly · monthly · manual | Cron scheduling of product reviews; `on_push` turns on *scan on push* for every repo (each repo can be switched on the product page) |
 | `depth` | triage · standard · deep_poc | How many files are reviewed. `deep_poc` adds a PoC and fix verification to every critical/high finding |
 | `focus` | code · dependencies · secrets · config · ci | File ranking and reviewer instructions. Turning off `dependencies` skips the OSV step |
 | `minSeverity` | critical … info | Findings below the threshold are hidden on the dashboard (still stored) |

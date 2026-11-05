@@ -7,6 +7,7 @@ export interface ScanListItem {
   id: string
   repo: string
   repo_id: number
+  product_scan_id: string | null
   kind: string
   trigger: string
   status: string
@@ -29,23 +30,87 @@ export async function listScans(userId: string, limit = 25): Promise<ScanListIte
     userId,
     limit,
   )
-  return rows.map((s) => {
-    const summary = parseJson<{ riskLevel?: string; headline?: string }>(s.summary_json, {})
+  return rows.map((s) => toListItem(s))
+}
+
+function toListItem(s: ScanRow & { repo: string; findings: number }): ScanListItem {
+  const summary = parseJson<{ riskLevel?: string; headline?: string }>(s.summary_json, {})
+  return {
+    id: s.id,
+    repo: s.repo,
+    repo_id: s.repo_id,
+    product_scan_id: s.product_scan_id ?? null,
+    kind: s.kind,
+    trigger: s.trigger,
+    status: s.status,
+    phase: s.phase,
+    progress: s.progress,
+    engine: s.engine,
+    created_at: s.created_at,
+    finished_at: s.finished_at,
+    risk: summary.riskLevel ?? null,
+    headline: summary.headline ?? null,
+    findings: s.findings,
+  }
+}
+
+const RISK_ORDER = ['critical', 'high', 'medium', 'low', 'none']
+
+export interface ProductScanItem {
+  id: string
+  product_id: string
+  product: string
+  trigger: string
+  /** Derived from the repository scans it owns. */
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  progress: number
+  created_at: number
+  finished_at: number | null
+  /** Worst risk across its repository scans. */
+  risk: string | null
+  findings: number
+  push: { repo: string | null; commit_sha: string | null } | null
+  scans: ScanListItem[]
+}
+
+/** Product scans (newest first), each with the repository scans it owns. */
+export async function listProductScans(userId: string, opts: { productId?: string; limit?: number } = {}): Promise<ProductScanItem[]> {
+  const rows = await all<{ id: string; product_id: string; product: string; trigger: string; push_repo: string | null; commit_sha: string | null; created_at: number }>(
+    `SELECT ps.id, ps.product_id, p.name AS product, ps.trigger, r.full_name AS push_repo, ps.commit_sha, ps.created_at
+     FROM product_scans ps JOIN products p ON p.id = ps.product_id LEFT JOIN repositories r ON r.id = ps.push_repo_id
+     WHERE ps.user_id = ? ${opts.productId ? 'AND ps.product_id = ?' : ''}
+     ORDER BY ps.created_at DESC LIMIT ?`,
+    ...([userId, ...(opts.productId ? [opts.productId] : []), opts.limit ?? 25] as Array<string | number>),
+  )
+  if (!rows.length) return []
+  const children = await all<ScanRow & { repo: string; findings: number }>(
+    `SELECT s.*, r.full_name AS repo,
+       (SELECT COUNT(*) FROM findings f WHERE f.scan_id = s.id AND f.status = 'open') AS findings
+     FROM scans s JOIN repositories r ON r.id = s.repo_id
+     WHERE s.user_id = ? AND s.product_scan_id IN (${rows.map(() => '?').join(',')}) ORDER BY r.full_name`,
+    userId,
+    ...rows.map((r) => r.id),
+  )
+  return rows.map((ps): ProductScanItem => {
+    const scans = children.filter((c) => c.product_scan_id === ps.id).map((s) => toListItem(s))
+    const live = scans.some((s) => s.status === 'queued' || s.status === 'running')
+    const status = live
+      ? scans.some((s) => s.status === 'running') ? 'running' : 'queued'
+      : scans.length && scans.every((s) => s.status === 'failed') ? 'failed' : 'completed'
+    const risks = scans.map((s) => s.risk).filter((r): r is string => Boolean(r)).sort((a, b) => RISK_ORDER.indexOf(a) - RISK_ORDER.indexOf(b))
     return {
-      id: s.id,
-      repo: s.repo,
-      repo_id: s.repo_id,
-      kind: s.kind,
-      trigger: s.trigger,
-      status: s.status,
-      phase: s.phase,
-      progress: s.progress,
-      engine: s.engine,
-      created_at: s.created_at,
-      finished_at: s.finished_at,
-      risk: summary.riskLevel ?? null,
-      headline: summary.headline ?? null,
-      findings: s.findings,
+      id: ps.id,
+      product_id: ps.product_id,
+      product: ps.product,
+      trigger: ps.trigger,
+      status,
+      progress: scans.length ? Math.round(scans.reduce((n, s) => n + (s.status === 'failed' ? 100 : s.progress), 0) / scans.length) : 0,
+      created_at: ps.created_at,
+      finished_at: live ? null : Math.max(0, ...scans.map((s) => s.finished_at ?? 0)) || null,
+      risk: risks[0] ?? null,
+      findings: scans.reduce((n, s) => n + s.findings, 0),
+      push: ps.trigger === 'push' ? { repo: ps.push_repo, commit_sha: ps.commit_sha } : null,
+      scans,
     }
   })
 }
@@ -119,8 +184,10 @@ export function listQuestions(userId: string, statuses: string[] = ['open'], rep
 }
 
 export async function scanDetail(userId: string, scanId: string) {
-  const scan = await first<ScanRow & { repo: string; html_url: string | null; profile_json: string | null; skills_json: string | null; codex_tasks_json: string | null }>(
-    `SELECT s.*, r.full_name AS repo, r.html_url, r.profile_json FROM scans s JOIN repositories r ON r.id = s.repo_id WHERE s.id = ? AND s.user_id = ?`,
+  const scan = await first<ScanRow & { repo: string; html_url: string | null; profile_json: string | null; skills_json: string | null; codex_tasks_json: string | null; product: string | null }>(
+    `SELECT s.*, r.full_name AS repo, r.html_url, r.profile_json, p.name AS product
+     FROM scans s JOIN repositories r ON r.id = s.repo_id LEFT JOIN products p ON p.id = s.product_id
+     WHERE s.id = ? AND s.user_id = ?`,
     scanId,
     userId,
   )
