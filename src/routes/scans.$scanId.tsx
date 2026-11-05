@@ -198,6 +198,11 @@ function ScanPage() {
               <>
                 ; product memory let us skip {summary.memory.skippedFiles} unchanged file{summary.memory.skippedFiles === 1 ? '' : 's'} and reuse {summary.memory.reusedVerdicts} earlier verdict
                 {summary.memory.reusedVerdicts === 1 ? '' : 's'}
+                {summary.memory.carriedFindings ? (
+                  <>
+                    {' '}(their {summary.memory.carriedFindings} open finding{summary.memory.carriedFindings === 1 ? ' is' : 's are'} carried into this report)
+                  </>
+                ) : null}
               </>
             ) : null}
             .

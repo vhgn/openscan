@@ -111,7 +111,7 @@ export interface ScanSummary {
   /** Findings whose verdict hinges on a fact outside the source (Cloudflare needs_validation). */
   needsValidation?: Array<{ title: string; missingFact: string }>
   /** Work saved by product memory in this scan. */
-  memory?: { skippedFiles: number; reusedVerdicts: number }
+  memory?: { skippedFiles: number; reusedVerdicts: number; carriedFindings?: number }
   /** Validation outcome counts. */
   validation?: { confirmed: number; needs_validation: number; rejected: number; unverified: number }
 }

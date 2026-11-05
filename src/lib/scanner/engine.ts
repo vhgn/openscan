@@ -106,6 +106,8 @@ export interface ScanState {
   memorySkipped?: string[]
   /** Findings whose verdict was reused from product memory. */
   memoryVerdicts?: number
+  /** Open findings carried over from earlier scans for the files product memory skipped. */
+  memoryCarried?: number
   /** Codex Cloud runtime state. */
   codex?: { envId: string; envLabel: string | null; tasks: Partial<Record<CP.CodexRole, { id: string; startedAt: number; status?: string; tokenHash?: string }>> }
 }
@@ -570,6 +572,7 @@ async function initTree(ctx: StepCtx, maxFiles: number, boost: string[] = []) {
       ctx.state.memorySkipped = skip.slice(0, 200)
       await memoryHit(mem.ids)
       await logEvent(ctx.scan.id, `Product memory: skipping ${skip.length} file(s) already reviewed at their current version`)
+      ctx.state.memoryCarried = await carryFindings(ctx, skip, mem.reviewedBy)
     }
   }
   ctx.state.files = selectFiles(candidates, { maxFiles, maxBytesPerFile: MAX_FILE_CHARS, boost, focus: ctx.prefs.focus, priority: ctx.state.changed })
@@ -715,6 +718,77 @@ async function rememberBatch(ctx: StepCtx, paths: string[], findings: Array<{ fi
     ctx.scan.id,
     paths.map((path) => ({ path, hash: ctx.state.hashes?.[path] ?? null, findings: findings.filter((f) => f.file === path).length })),
   )
+}
+
+/** Finding sources produced by reviewing a file's content (the work product memory skips). */
+const REVIEW_SOURCES = ['ai-review', 'heuristic']
+
+type FindingRow = {
+  id: string; scan_id: string; severity: string; category: string; title: string; file: string | null; line: number | null; description: string
+  impact: string | null; recommendation: string | null; poc: string | null; confidence: string | null; fingerprint: string; status: string; created_at: number
+  trace_json: string | null; threat_model: string | null; source: string | null; skills_json: string | null; verdict: string | null; verification: string | null
+  carried_from: string | null
+}
+
+/**
+ * Product memory skipped `paths` because they were reviewed at their current blob hash, so the
+ * scan would otherwise lose what that review found. Copies each still-open finding into this scan
+ * (same fingerprint, verdict and evidence). The newest copy of a finding since the reviewing scan
+ * decides: one the user (or triage, or the validator) dismissed or marked fixed stays out.
+ * Dependency, runtime and code-scanning findings are not carried: those steps rerun every scan.
+ */
+async function carryFindings(ctx: StepCtx, paths: string[], reviewedBy: Record<string, string | null>): Promise<number> {
+  const scans = new Map(
+    (
+      await all<{ id: string; created_at: number }>(
+        `SELECT id, created_at FROM scans WHERE repo_id = ? AND user_id = ? AND kind = 'security' AND id <> ?`,
+        ctx.repo.id,
+        ctx.user.id,
+        ctx.scan.id,
+      )
+    ).map((r) => [r.id, r.created_at]),
+  )
+  // Per path: when the scan that reviewed it at this hash ran. Unknown reviewer → nothing to carry.
+  const since = new Map<string, number>()
+  for (const p of paths) {
+    const at = reviewedBy[p] ? scans.get(reviewedBy[p]!) : undefined
+    if (at !== undefined) since.set(p, at)
+  }
+  if (!since.size) return 0
+  const rows = await all<FindingRow & { scan_at: number }>(
+    `SELECT f.*, s.created_at AS scan_at FROM findings f JOIN scans s ON s.id = f.scan_id
+     WHERE f.repo_id = ? AND f.user_id = ? AND s.kind = 'security' AND f.scan_id <> ? AND s.created_at >= ?
+       AND f.file IS NOT NULL AND COALESCE(f.source, 'ai-review') IN (${REVIEW_SOURCES.map(() => '?').join(',')})`,
+    ctx.repo.id,
+    ctx.user.id,
+    ctx.scan.id,
+    Math.min(...since.values()),
+    ...REVIEW_SOURCES,
+  )
+  const latest = new Map<string, FindingRow & { scan_at: number }>()
+  for (const r of rows) {
+    const from = since.get(r.file!)
+    if (from === undefined || r.scan_at < from) continue
+    const seen = latest.get(r.fingerprint)
+    if (!seen || r.scan_at > seen.scan_at) latest.set(r.fingerprint, r)
+  }
+  const existing = new Set(
+    (await all<{ fingerprint: string }>('SELECT fingerprint FROM findings WHERE scan_id = ?', ctx.scan.id)).map((f) => f.fingerprint),
+  )
+  const carry = [...latest.values()].filter((r) => r.status === 'open' && !existing.has(r.fingerprint))
+  await batch(
+    carry.map((r) => [
+      `INSERT INTO findings (id, scan_id, repo_id, user_id, severity, category, title, file, line, description, impact, recommendation, poc, confidence, fingerprint, created_at, trace_json, threat_model, source, skills_json, verdict, verification, status, carried_from)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+      [
+        uid(), ctx.scan.id, ctx.repo.id, ctx.user.id, r.severity, r.category, r.title, r.file, r.line, r.description,
+        r.impact, r.recommendation, r.poc, r.confidence, r.fingerprint, r.created_at,
+        r.trace_json, r.threat_model, r.source, r.skills_json, r.verdict, r.verification, r.carried_from ?? r.scan_id,
+      ],
+    ]),
+  )
+  if (carry.length) await logEvent(ctx.scan.id, `Product memory: carried ${carry.length} open finding(s) over from unchanged files`)
+  return carry.length
 }
 
 /** Durable facts worth sharing with every agent in the product. */
@@ -1176,7 +1250,7 @@ const VALIDATE_PER_STEP = 2
 async function startValidation(ctx: StepCtx): Promise<StepResult> {
   const cap = ctx.prefs.depth === 'triage' ? 4 : ctx.prefs.depth === 'deep_poc' ? 12 : 8
   const rows = await all<{ id: string }>(
-    `SELECT id FROM findings WHERE scan_id = ? AND status = 'open' AND verdict IS NULL
+    `SELECT id FROM findings WHERE scan_id = ? AND status = 'open' AND verdict IS NULL AND carried_from IS NULL
        AND severity IN ('critical','high','medium') AND COALESCE(source, 'ai-review') IN ('ai-review','heuristic','code-scanning')
      ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, created_at LIMIT ?`,
     ctx.scan.id,
@@ -1341,7 +1415,7 @@ async function triage(ctx: StepCtx, profile: RepoProfile | null) {
   summary.needsValidation = nv.map((r) => ({ title: r.title, missingFact: /^Missing fact: (.+)$/m.exec(r.verification ?? '')?.[1] ?? '' }))
   summary.filesReviewed = state.filesReviewed ?? 0
   summary.dependenciesChecked = state.depsChecked ?? 0
-  summary.memory = { skippedFiles: state.memorySkipped?.length ?? 0, reusedVerdicts: state.memoryVerdicts ?? 0 }
+  summary.memory = { skippedFiles: state.memorySkipped?.length ?? 0, reusedVerdicts: state.memoryVerdicts ?? 0, carriedFindings: state.memoryCarried ?? 0 }
   await run('UPDATE scans SET summary_json = ?, skills_json = ? WHERE id = ?', JSON.stringify(summary), JSON.stringify(state.skills ?? []), scan.id)
 }
 

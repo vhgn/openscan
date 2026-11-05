@@ -218,7 +218,7 @@ Every product has one **memory** (table `memory`), so agents don't re-check the 
 | Kind | What is remembered | How agents use it |
 | --- | --- | --- |
 | `fact` | Profile facts (auth, deployment, data stores), `UNENFORCED:` assumptions, owner answers | Injected into every agent prompt (direct and Codex) as *established facts*, together with the profiles of the product's other repos for cross-repo trust boundaries |
-| `reviewed` | `repo:path` at a git blob hash, with its outcome | Security scans **skip files reviewed at the same hash** within 30 days (14 for deep scans). Push-changed files are always re-reviewed. Codex tasks get the skip list. |
+| `reviewed` | `repo:path` at a git blob hash, with its outcome | Security scans **skip files reviewed at the same hash** within 30 days (14 for deep scans). Push-changed files are always re-reviewed. Codex tasks get the skip list. A skipped file's **open findings are carried into the new scan** (same fingerprint and verdict, `carried_from` = the scan that reviewed it, not re-validated), so the latest report and its stats stay complete; ones dismissed or fixed on the latest report that holds them stay out. |
 | `verdict` | Validator outcome for a claim, plus the file's blob hash | The same claim (same file and category, similar title) on **byte-identical code** keeps its earlier verdict: rejected stays dismissed, confirmed carries over without re-validation. Any code change triggers fresh validation. |
 
 `/products/:id` shows the memory, with a hit counter per entry ("re-checks avoided"). Every entry, or a whole kind, can be forgotten.

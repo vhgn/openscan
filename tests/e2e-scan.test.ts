@@ -204,7 +204,7 @@ test('onboarding read + security report with a stubbed LLM', async () => {
     dependenciesChecked: 2,
     validation: { confirmed: 1, needs_validation: 1, rejected: 0, unverified: 2 },
     needsValidation: [{ title: RATE, missingFact: MISSING_FACT }],
-    memory: { skippedFiles: 0, reusedVerdicts: 0 },
+    memory: { skippedFiles: 0, reusedVerdicts: 0, carriedFindings: 0 },
   })
   const skills = JSON.parse(scanRow(t, security).skills_json!) as string[]
   assert.ok(skills.length > 3 && skills.includes('tob-supply-chain-risk-auditor'), 'skills used by the scan are recorded')
@@ -226,12 +226,38 @@ test('a second report on unchanged code reuses product memory', async () => {
   const row = scanRow(t, again)
   assert.equal(row.status, 'completed')
   const summary = JSON.parse(row.summary_json!)
-  assert.deepEqual(summary.memory, { skippedFiles: 4, reusedVerdicts: 0 })
+  assert.deepEqual(summary.memory, { skippedFiles: 4, reusedVerdicts: 0, carriedFindings: 2 })
   assert.deepEqual(
     llm.calls.map((c) => c.role),
     ['triage'],
-    'no file is re-reviewed and nothing new needs validating',
+    'no file is re-reviewed and nothing new (carried findings included) needs validating',
   )
   assert.match(llm.calls[0].system, /triage lead/)
+  // The validator-confirmed critical and the open needs_validation finding are carried with their
+  // verdicts; the finding triage dismissed in the first report stays out.
+  const findings = t.db.rows<{ title: string; severity: string; status: string; verdict: string | null; carried_from: string | null }>(
+    'SELECT title, severity, status, verdict, carried_from FROM findings WHERE scan_id = ? ORDER BY priority',
+    again,
+  )
+  assert.deepEqual(
+    findings.map((x) => [x.title, x.severity, x.status, x.verdict, x.carried_from]),
+    [
+      [SQLI, 'critical', 'open', 'confirmed', security],
+      ['lodash@4.17.15 has 1 known vulnerability', 'critical', 'open', null, null],
+      [RATE, 'medium', 'open', 'needs_validation', security],
+    ],
+  )
+  assert.deepEqual(summary.stats, { critical: 2, high: 0, medium: 1, low: 0, info: 0 })
+  assert.deepEqual(summary.needsValidation, [{ title: RATE, missingFact: MISSING_FACT }])
+  const { listFindings } = await import('#/lib/queries')
+  assert.deepEqual(
+    (await listFindings(user)).map((x) => [x.scan_id, x.title]),
+    [
+      [again, SQLI],
+      [again, 'lodash@4.17.15 has 1 known vulnerability'],
+      [again, RATE],
+    ],
+    'the latest report keeps the confirmed critical',
+  )
   assertNoUnexpectedFetch(f)
 })
