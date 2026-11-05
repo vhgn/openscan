@@ -3,7 +3,16 @@ import { useEffect, useState } from 'react'
 import { Lede, Margin, Page, SectionHead, Title, plural } from '#/components/ui'
 import { ChatGPTConnect } from '#/components/ChatGPTConnect'
 import { PreferencesForm } from '#/components/PreferencesForm'
-import { checkCodexInternet, disconnectChatGPT, getOnboarding, refreshCodexEnvironments, savePreferences, testCodexInternet } from '#/server-fns/app'
+import {
+  checkCodexInternet,
+  disconnectChatGPT,
+  getOnboarding,
+  listCodexEnvironments,
+  refreshCodexEnvironments,
+  saveCodexRunner,
+  savePreferences,
+  testCodexInternet,
+} from '#/server-fns/app'
 
 export const Route = createFileRoute('/settings')({
   loader: async () => {
@@ -92,7 +101,7 @@ function Settings() {
             Codex Cloud
           </SectionHead>
           <p className="mt-4 text-[17px] leading-[1.6] text-ink-3">
-            With a Codex environment, agents work as Codex tasks with the whole repository checked out. Without one, they read files through ChatGPT.
+            With a Codex environment, agents work as Codex tasks with the whole repository checked out. Without one, they use the runner environment below if you pick one, or read files through ChatGPT.
           </p>
           <ul className="mt-4 border-y border-rule">
             {selected.map((r) => (
@@ -100,7 +109,13 @@ function Settings() {
                 <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                   <span className="min-w-0 break-words text-[17px]">{r.fullName}</span>
                   <span className={`font-sans text-[12.5px] ${r.codexEnv ? 'text-ink' : 'text-muted'}`}>
-                    {r.codexEnv ? `● ${r.codexEnv}` : r.codexChecked ? '○ no environment' : '○ not checked yet'}
+                    {r.codexEnv
+                      ? `● ${r.codexEnv}`
+                      : data.codexRunner
+                        ? `◐ runner: ${data.codexRunner.label ?? data.codexRunner.id}`
+                        : r.codexChecked
+                          ? '○ no environment'
+                          : '○ not checked yet'}
                   </span>
                 </div>
                 {r.codexEnv && (
@@ -152,6 +167,7 @@ function Settings() {
             </button>
             {note && <span>{note}</span>}
           </p>
+          <RunnerPicker runner={data.codexRunner} />
         </>
       )}
 
@@ -167,5 +183,91 @@ function Settings() {
         />
       </div>
     </Page>
+  )
+}
+
+type Runner = { id: string; label: string | null; branch: string } | null
+
+/** One Codex environment for every repo without its own: its tasks clone the repo under review first. */
+function RunnerPicker({ runner }: { runner: Runner }) {
+  const router = useRouter()
+  const [envs, setEnvs] = useState<Array<{ id: string; label: string | null }> | null>(null)
+  const [envId, setEnvId] = useState(runner?.id ?? '')
+  const [branch, setBranch] = useState(runner?.branch ?? 'main')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  async function load() {
+    setBusy(true)
+    setNote(null)
+    const res = await listCodexEnvironments()
+    if (res.ok) {
+      setEnvs(res.envs)
+      if (!envId && res.envs[0]) setEnvId(res.envs[0].id)
+      if (!res.envs.length) setNote('No environments in your Codex workspace yet.')
+    } else setNote(res.reason)
+    setBusy(false)
+  }
+
+  async function save(id: string | null) {
+    setBusy(true)
+    setNote(null)
+    const res = await saveCodexRunner({ data: { envId: id, branch } })
+    if (res.ok) {
+      setEnvs(null)
+      await router.invalidate()
+    } else setNote(res.reason)
+    setBusy(false)
+  }
+
+  return (
+    <div className="mt-8">
+      <p className="label">Runner environment</p>
+      <p className="mt-2 text-[17px] leading-[1.6] text-ink-3">
+        Repositories without their own environment can run in one shared environment instead. Each task clones the repository first (private ones with a read-only token
+        for that repository, revoked when the task ends), so the runner needs agent internet access with <span className="font-mono text-[14px]">github.com</span> allowlisted.
+        Setup scripts don&rsquo;t run for the cloned repository, so agents review its code but can&rsquo;t run its tests.
+      </p>
+      {runner && !envs && (
+        <p className="mt-3 font-sans text-[13px]">
+          ● {runner.label ?? runner.id} <span className="text-muted">(checks out {runner.branch})</span>
+        </p>
+      )}
+      {envs && envs.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-3 font-sans text-[13px]">
+          <select className="border border-rule bg-transparent px-2 py-1" value={envId} onChange={(e) => setEnvId(e.target.value)} aria-label="Runner environment">
+            {envs.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.label ?? e.id}
+              </option>
+            ))}
+          </select>
+          <label className="flex items-center gap-2 text-muted">
+            branch of its repo
+            <input className="w-28 border border-rule bg-transparent px-2 py-1 text-ink" value={branch} onChange={(e) => setBranch(e.target.value)} aria-label="Runner branch" />
+          </label>
+          <button className="underline underline-offset-4 hover:text-ink" disabled={busy || !envId} onClick={() => save(envId)}>
+            {busy ? 'Saving…' : 'Use this environment'}
+          </button>
+          <button className="text-muted underline underline-offset-4 hover:text-ink" disabled={busy} onClick={() => setEnvs(null)}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {!envs && (
+        <p className="mt-3 flex items-center gap-4 font-sans text-[13px] text-muted">
+          <button className="underline underline-offset-4 hover:text-ink" disabled={busy} onClick={load}>
+            {busy ? 'Loading…' : runner ? 'Change' : 'Choose an environment'}
+          </button>
+          {runner && (
+            <button className="underline underline-offset-4 hover:text-ink" disabled={busy} onClick={() => save(null)}>
+              Stop using it
+            </button>
+          )}
+          {note && <span>{note}</span>}
+        </p>
+      )}
+      {envs && note && <p className="mt-2 font-sans text-[13px] text-muted">{note}</p>}
+    </div>
   )
 }

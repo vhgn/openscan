@@ -41,6 +41,45 @@ export async function codexEnvironmentFor(userId: string, repo: { id: number; fu
   return env ? { id: env.id, label: env.label } : null
 }
 
+// ---------------------------------------------------------------- runner environment
+
+export interface CodexRunner {
+  id: string
+  label: string | null
+  /** Branch of the runner environment's own repository for Codex to check out. */
+  branch: string
+}
+
+/** The user's runner environment: used for repos without an environment of their own. */
+export function codexRunnerOf(user: Pick<UserRow, 'codex_runner_env_id' | 'codex_runner_env_label' | 'codex_runner_branch'>): CodexRunner | null {
+  if (!user.codex_runner_env_id) return null
+  return { id: user.codex_runner_env_id, label: user.codex_runner_env_label ?? null, branch: user.codex_runner_branch || 'main' }
+}
+
+/** Saves (or clears, with null) the runner environment after checking it exists in the user's workspace. */
+export async function setCodexRunner(
+  user: Pick<UserRow, 'id' | 'chatgpt_cookie_enc'>,
+  input: { envId: string; branch: string } | null,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (!input) {
+    await run('UPDATE users SET codex_runner_env_id = NULL, codex_runner_env_label = NULL, codex_runner_branch = NULL, updated_at = ? WHERE id = ?', now(), user.id)
+    return { ok: true }
+  }
+  const client = await codexClientFor(user)
+  if (!client) return { ok: false, reason: 'Link ChatGPT first' }
+  const env = (await client.listEnvironments()).find((e) => e.id === input.envId)
+  if (!env) return { ok: false, reason: 'That environment is not in your Codex workspace' }
+  await run(
+    'UPDATE users SET codex_runner_env_id = ?, codex_runner_env_label = ?, codex_runner_branch = ?, updated_at = ? WHERE id = ?',
+    env.id,
+    env.label,
+    input.branch.trim() || 'main',
+    now(),
+    user.id,
+  )
+  return { ok: true }
+}
+
 // ---------------------------------------------------------------- internet probe (settings)
 
 const PROBE_TTL_MS = 15 * 60_000

@@ -48,7 +48,7 @@ The customer asked for three things, and each one shaped the product:
 | --- | --- | --- |
 | **GitHub App** install | Pasting a repo URL | Private repos need access anyway, and scans can run while the user is offline. Costs more setup. Any public `owner/repo` (or GitHub link) can still be typed in and scanned without the app. |
 | **User's own ChatGPT plan** ([login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)) | Our API key | Simplest to build, no inference bill or keys, and anyone in public can run scans on their own plan. Costs a dependency on a young SDK and a 120 requests/min limit. |
-| **Codex Cloud tasks** when a Codex environment exists | File batches only | The agent sees the whole repo, not the top 30 to 50 files. Uses undocumented endpoints; falls back to direct review. |
+| **Codex Cloud tasks** when a Codex environment exists, or in one shared runner environment that clones the repo | File batches only | The agent sees the whole repo, not the top 30 to 50 files. Uses undocumented endpoints; falls back to direct review. The runner needs agent internet access and puts a short-lived read-only token in the task prompt. |
 | **Workers + D1 + Queues** (TypeScript, `nodejs_compat`) | A Node server with long jobs | One cheap deploy. Scans become small retryable steps, and a cron revives stalled ones. Not a plain Node process. |
 | **Validator agent** per serious finding | Reporting everything | Fewer false alarms; slower scans, more tokens. |
 | **Repositories treated as trusted input**, repository content still fenced as data in prompts | Hardening against hostile repositories | The user picks what to scan, the model only reads, and a misleading report reaches only that user, so prompt-injection risk is low. Every prompt still marks repository text as data, never instructions ([details](./docs/TECHNICAL.md#technical-decisions)). |
@@ -59,7 +59,7 @@ The customer asked for three things, and each one shaped the product:
 - **Without ChatGPT**, the **heuristic engine** runs: real deterministic rules, OSV.dev and known-CVE checks, no AI. That is the "mocked scan" the brief allowed. Nothing returns made-up AI output.
 - **Verified end to end:** demo login through onboarding, both scan kinds with real OSV results, dashboard, report, REST API, cron, production build.
 - **Verified manually** by the owner across different repositories and accounts: ChatGPT device-login approval and AI scans, GitHub App install and sign-in, and webhooks.
-- **Not verified:** the Codex Cloud path, which still needs a real Codex environment.
+- **Not verified:** the Codex Cloud path (a per-repo environment or the runner environment), which still needs a real Codex environment.
 
 ## What we cut, and why
 

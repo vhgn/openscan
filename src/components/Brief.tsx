@@ -47,7 +47,7 @@ export function Brief({ data }: { data: DashboardData }) {
   const findings = applyFindingFilters(visible, filters)
   const hidden = data.findings.length - visible.length
   const urgent = visible.filter((f) => f.severity === 'critical' || f.severity === 'high').length
-  const codex = data.repos.filter((r) => r.codexEnv).length
+  const codex = data.codexRunner ? data.repos.length : data.repos.filter((r) => r.codexEnv).length
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })
 
   return (

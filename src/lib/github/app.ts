@@ -80,6 +80,25 @@ export async function installationToken(installationId: number): Promise<string>
   return res.token
 }
 
+/**
+ * A fresh token that can only read the contents of ONE repository, for handing to an
+ * agent outside openscan (a Codex runner task cloning the repo). Never cached: the
+ * caller revokes it as soon as the task ends, and GitHub expires it within the hour.
+ */
+export async function readOnlyRepoToken(installationId: number, repoId: number): Promise<{ token: string; expiresAt: number }> {
+  const res = await gh<{ token: string; expires_at: string }>(`/app/installations/${installationId}/access_tokens`, await appJwt(), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ repository_ids: [repoId], permissions: { contents: 'read' } }),
+  })
+  return { token: res.token, expiresAt: Date.parse(res.expires_at) }
+}
+
+/** Revokes an installation token early (DELETE /installation/token authenticates with the token itself). */
+export async function revokeInstallationToken(token: string): Promise<void> {
+  await gh<void>('/installation/token', token, { method: 'DELETE' })
+}
+
 // ---------- user OAuth (GitHub App user-to-server tokens) ----------
 
 export function githubConfigured(): boolean {

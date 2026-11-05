@@ -9,8 +9,9 @@
  *   understand:  init -> read* -> profile -> done                      (onboarding "AI reads your repo")
  *   security:    init -> deps -> review* -> validate* -> triage -> done  (the security report)
  *
- * Codex engine (user has a Codex Cloud environment for the repo): the agent work runs as
- * Codex Cloud tasks on the user's ChatGPT plan, polled via delayed queue messages:
+ * Codex engine (user has a Codex Cloud environment for the repo, or a runner environment
+ * whose tasks clone the repo first): the agent work runs as Codex Cloud tasks on the
+ * user's ChatGPT plan, polled via delayed queue messages:
  *   understand:  init -> codex_recon -> codex_recon_wait* -> done
  *   security:    init -> deps -> codex_hunt -> codex_hunt_wait* -> codex_validate -> codex_validate_wait* -> triage
  * Any Codex failure falls back to the direct engine (read* or review*) for that scan.
@@ -39,7 +40,9 @@ import { huntPlaybook, reconPlaybook, reportPlaybook, validatePlaybook } from '.
 import { tracePaths } from './trace'
 import { similarQuestion } from '../memory-match'
 import { acquireLease, releaseLease, STALL_MS, STALLED_SCANS_SQL } from './lease'
-import { codexClientFor, codexEnvironmentFor } from '../codex/runtime'
+import { codexClientFor, codexEnvironmentFor, codexRunnerOf } from '../codex/runtime'
+import { readOnlyRepoToken, revokeInstallationToken } from '../github/app'
+import { decrypt, encrypt } from '../crypto'
 import { environmentsSettingsUrl, taskUrl } from '../codex/cloud'
 import * as CP from '../codex/prompts'
 import { attachTask, issueAgentToken, revokeAgentToken, revokeScanTokens, setCodexNet } from '../codex/agent-tokens'
@@ -109,7 +112,13 @@ export interface ScanState {
   /** Open findings carried over from earlier scans for the files product memory skipped. */
   memoryCarried?: number
   /** Codex Cloud runtime state. */
-  codex?: { envId: string; envLabel: string | null; tasks: Partial<Record<CP.CodexRole, { id: string; startedAt: number; status?: string; tokenHash?: string }>> }
+  codex?: {
+    envId: string
+    envLabel: string | null
+    /** Set when envId is the user's runner environment: tasks check out `branch` of the runner's repo and clone the scanned repo. */
+    runner?: { branch: string }
+    tasks: Partial<Record<CP.CodexRole, { id: string; startedAt: number; status?: string; tokenHash?: string; ghTokenEnc?: string }>>
+  }
 }
 
 // ---------------------------------------------------------------- public API
@@ -197,6 +206,7 @@ export async function cancelScan(userId: string, scanId: string): Promise<Cancel
   )
   if (cancelled) {
     await revokeScanTokens(scanId) // Codex tasks lose product-memory access right away
+    await revokeCloneTokens(scanId)
     await logEvent(scanId, 'Cancelled by the user', 'warn')
     return { ok: true }
   }
@@ -414,12 +424,17 @@ async function resolveEngine(ctx: StepCtx): Promise<BackgroundLLM | null> {
     if (llm) {
       const client = await codexClientFor(user).catch(() => null)
       const env = client ? await codexEnvironmentFor(user.id, ctx.repo, client).catch(() => null) : null
+      const runner = client && !env ? codexRunnerOf(user) : null
       if (env) {
         engine = 'codex'
         ctx.state.codex = { envId: env.id, envLabel: env.label, tasks: {} }
         await logEvent(scan.id, `Using Codex Cloud tasks in environment "${env.label ?? env.id}" on the user's ChatGPT plan`)
+      } else if (runner && CP.safeRepoName(ctx.repo.full_name) && (!ctx.repo.private || ctx.repo.installation_id)) {
+        engine = 'codex'
+        ctx.state.codex = { envId: runner.id, envLabel: runner.label, runner: { branch: runner.branch }, tasks: {} }
+        await logEvent(scan.id, `Using Codex Cloud tasks in the runner environment "${runner.label ?? runner.id}"; each task clones ${ctx.repo.full_name} first`)
       } else {
-        await logEvent(scan.id, `No Codex Cloud environment for ${ctx.repo.full_name} (create one at ${environmentsSettingsUrl()}); using direct ChatGPT review`)
+        await logEvent(scan.id, `No Codex Cloud environment for ${ctx.repo.full_name} (create one, or pick a runner environment in Settings: ${environmentsSettingsUrl()}); using direct ChatGPT review`)
       }
     }
     await run('UPDATE scans SET engine = ?, model = ? WHERE id = ?', engine, engine === 'codex' ? 'codex-cloud' : (llm?.model ?? null), scan.id)
@@ -453,6 +468,7 @@ async function fail(scan: ScanRow, leaseId: string, message: string): Promise<nu
   )
   if (!changed) return notApplied(scan)
   await revokeScanTokens(scan.id)
+  await revokeCloneTokens(scan.id)
   await logEvent(scan.id, `Scan failed: ${message.slice(0, 300)}`, 'error')
   return null
 }
@@ -1090,7 +1106,7 @@ async function codexFallback(ctx: StepCtx, reason: string): Promise<StepResult> 
 async function runCodexTask<R extends CP.CodexRole>(
   ctx: StepCtx,
   role: R,
-  build: (memory: CP.TaskMemory) => Promise<{ prompt: string; skills: string[] }>,
+  build: (memory: CP.TaskMemory, checkout: CP.Checkout | null) => Promise<{ prompt: string; skills: string[] }>,
   progress: number,
 ): Promise<{ done: CP.TaskOutput<R> } | { step: StepResult }> {
   const { scan, state } = ctx
@@ -1104,20 +1120,39 @@ async function runCodexTask<R extends CP.CodexRole>(
       const issued = ctx.product
         ? await issueAgentToken({ userId: ctx.user.id, repoId: ctx.repo.id, productId: ctx.product.id, scanId: scan.id, purpose: role, ttlMs: CODEX_TIMEOUT_MS + 5 * 60_000 }).catch(() => null)
         : null
-      const { prompt, skills } = await build({ summary: ctx.memory, api: issued?.api ?? null })
-      useSkills(ctx, skills)
-      const branch = ctx.repo.default_branch || 'main'
+      let checkout: CP.Checkout | null = null
+      let gh: { token: string } | null = null
+      if (state.codex.runner) {
+        // Private repos: a token that can only read this one repository, revoked when the task ends.
+        if (ctx.repo.private) {
+          if (!ctx.repo.installation_id) {
+            if (issued) await revokeAgentToken(issued.hash)
+            return { step: await codexFallback(ctx, 'the runner environment cannot clone a private repository without the GitHub App installed on it') }
+          }
+          gh = await readOnlyRepoToken(ctx.repo.installation_id, ctx.repo.id)
+        }
+        checkout = { repo: ctx.repo.full_name, token: gh?.token ?? null }
+      }
+      const branch = state.codex.runner ? state.codex.runner.branch : ctx.repo.default_branch || 'main'
       let id: string
       try {
+        const { prompt, skills } = await build({ summary: ctx.memory, api: issued?.api ?? null }, checkout)
+        useSkills(ctx, skills)
         id = await client.createTask({ environmentId: state.codex.envId, branch, prompt, qaMode: true })
       } catch (e) {
         if (issued) await revokeAgentToken(issued.hash)
+        if (gh) await revokeInstallationToken(gh.token).catch(() => undefined)
         throw e
       }
       if (issued) await attachTask(issued.hash, id)
-      state.codex.tasks[role] = { id, startedAt: now(), tokenHash: issued?.hash }
+      state.codex.tasks[role] = { id, startedAt: now(), tokenHash: issued?.hash, ghTokenEnc: gh ? await encrypt(gh.token) : undefined }
       await recordCodexTasks(ctx, { [role]: 'running' } as Partial<Record<CP.CodexRole, string>>)
-      await logEvent(scan.id, `Codex Cloud ${role} task started on ${branch}: ${taskUrl(id)}`)
+      await logEvent(
+        scan.id,
+        state.codex.runner
+          ? `Codex Cloud ${role} task started in the runner environment (clones ${ctx.repo.full_name}${gh ? ' with a read-only token' : ''}): ${taskUrl(id)}`
+          : `Codex Cloud ${role} task started on ${branch}: ${taskUrl(id)}`,
+      )
       return { step: { phase: waitPhase, progress, delay: CODEX_POLL_SECONDS } }
     }
     const task = state.codex.tasks[role]
@@ -1128,14 +1163,26 @@ async function runCodexTask<R extends CP.CodexRole>(
     if (res.status === 'pending' || res.status === 'in_progress' || res.status === 'unknown') {
       if (now() - task.startedAt > CODEX_TIMEOUT_MS) {
         await finishTaskToken(ctx, role, undefined)
+        await finishCloneToken(ctx, role)
         return { step: await codexFallback(ctx, `${role} task timed out`) }
       }
       return { step: { phase: waitPhase, progress: Math.min(progress + 6, progress + Math.round((now() - task.startedAt) / 60_000)), delay: CODEX_POLL_SECONDS } }
     }
     await recordCodexTasks(ctx, { [role]: res.status } as Partial<Record<CP.CodexRole, string>>)
-    const out = res.status === 'completed' ? CP.parseTaskOutput(role, res.messages) : null
+    // The clone token must never reach findings, events or memory, even if the agent echoed it.
+    const messages = CP.redact(res.messages, await finishCloneToken(ctx, role))
+    const out = res.status === 'completed' ? CP.parseTaskOutput(role, messages) : null
     await finishTaskToken(ctx, role, out?.memoryApi)
     if (res.status !== 'completed') return { step: await codexFallback(ctx, `${role} task ${res.status}${res.error ? `: ${res.error}` : ''}`) }
+    const cloneError = state.codex.runner && !out ? CP.checkoutFailure(messages) : null
+    if (cloneError) {
+      return {
+        step: await codexFallback(
+          ctx,
+          `the runner environment could not clone ${ctx.repo.full_name} (${cloneError}). Turn on agent internet access for that environment and allowlist github.com`,
+        ),
+      }
+    }
     if (!out) return { step: await codexFallback(ctx, `${role} task finished without valid JSON output`) }
     return { done: out }
   } catch (e) {
@@ -1148,6 +1195,26 @@ async function runCodexTask<R extends CP.CodexRole>(
  * any request proves the agent phase reaches openscan; "unreachable" with no request
  * means internet is off or our host is not allowlisted.
  */
+/** Revokes every runner-task GitHub clone token a stopped scan still holds (they would expire within the hour anyway). */
+async function revokeCloneTokens(scanId: string) {
+  const row = await first<{ state_json: string }>('SELECT state_json FROM scans WHERE id = ?', scanId)
+  const tasks = parseJson<ScanState>(row?.state_json, {}).codex?.tasks ?? {}
+  for (const t of Object.values(tasks)) {
+    const token = t?.ghTokenEnc ? await decrypt(t.ghTokenEnc).catch(() => null) : null
+    if (token) await revokeInstallationToken(token).catch(() => undefined)
+  }
+}
+
+/** Revokes a runner task's GitHub clone token and returns it (for redaction), or null. */
+async function finishCloneToken(ctx: StepCtx, role: CP.CodexRole): Promise<string | null> {
+  const task = ctx.state.codex?.tasks[role]
+  if (!task?.ghTokenEnc) return null
+  const token = await decrypt(task.ghTokenEnc).catch(() => null)
+  delete task.ghTokenEnc
+  if (token) await revokeInstallationToken(token).catch(() => undefined) // expires within the hour regardless
+  return token
+}
+
 async function finishTaskToken(ctx: StepCtx, role: CP.CodexRole, reported: 'used' | 'unreachable' | 'not_needed' | undefined) {
   const hash = ctx.state.codex?.tasks[role]?.tokenHash
   if (!hash) return
@@ -1155,13 +1222,13 @@ async function finishTaskToken(ctx: StepCtx, role: CP.CodexRole, reported: 'used
   if (uses > 0) {
     await logEvent(ctx.scan.id, `Codex ${role} task made ${uses} product memory API request(s)`)
   } else if (reported === 'unreachable') {
-    await setCodexNet(ctx.user.id, ctx.repo.id, 'unreachable')
+    if (!ctx.state.codex?.runner) await setCodexNet(ctx.user.id, ctx.repo.id, 'unreachable')
     await logEvent(ctx.scan.id, `Codex ${role} task could not reach the product memory API (environment internet access is off or openscan is not allowlisted); it used the inline summary`, 'warn')
   }
 }
 
 async function codexReconStep(ctx: StepCtx): Promise<StepResult> {
-  const r = await runCodexTask(ctx, 'recon', async (memory) => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.ownerContext, openQuestions: await openQuestions(ctx), skippedQuestions: await skippedQuestions(ctx), memory }), 15)
+  const r = await runCodexTask(ctx, 'recon', async (memory, checkout) => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.ownerContext, openQuestions: await openQuestions(ctx), skippedQuestions: await skippedQuestions(ctx), memory, checkout }), 15)
   if ('step' in r) return r.step
   const { questions, answers, memoryApi: _memoryApi, ...profile } = r.done
   await applyAnswers(ctx, answers)
@@ -1178,7 +1245,7 @@ async function codexHuntStep(ctx: StepCtx, profile: RepoProfile | null): Promise
   const r = await runCodexTask(
     ctx,
     'hunt',
-    async (memory) => {
+    async (memory, checkout) => {
       const already = await all<{ title: string }>('SELECT title FROM findings WHERE scan_id = ?', ctx.scan.id)
       return CP.huntPrompt({
         repo: ctx.repo.full_name,
@@ -1191,6 +1258,7 @@ async function codexHuntStep(ctx: StepCtx, profile: RepoProfile | null): Promise
         changed: ctx.state.changed,
         priorityFiles: ctx.state.files ?? [],
         skippedQuestions: await skippedQuestions(ctx),
+        checkout,
       })
     },
     22,
@@ -1223,7 +1291,7 @@ async function codexValidateStep(ctx: StepCtx, profile: RepoProfile | null): Pro
   const r = await runCodexTask(
     ctx,
     'validate',
-    async (memory) =>
+    async (memory, checkout) =>
       CP.validatePrompt({
         repo: ctx.repo.full_name,
         prefs: { ...ctx.prefs, context: ctx.ownerContext },
@@ -1231,6 +1299,7 @@ async function codexValidateStep(ctx: StepCtx, profile: RepoProfile | null): Pro
         profile,
         knownAnswers: await knownAnswers(ctx),
         findings: rows.map((f, index) => ({ index, severity: f.severity, title: f.title, file: f.file, line: f.line, description: f.description, threatModel: f.threat_model, trace: parseJson<string[]>(f.trace_json, []) })),
+        checkout,
       }),
     78,
   )

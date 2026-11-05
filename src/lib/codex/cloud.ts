@@ -89,6 +89,12 @@ export function createCodexClient(creds: CodexCredentials, fetchImpl: FetchLike 
       }
     },
 
+    /** Every environment in the user's workspace (used to pick a shared runner environment). */
+    async listEnvironments(): Promise<CodexEnvironment[]> {
+      const rows = await call<Array<{ id: string; label?: string | null; is_pinned?: boolean | null; task_count?: number | null }>>('GET', '/wham/environments')
+      return (Array.isArray(rows) ? rows : []).map(normalizeEnv)
+    },
+
     /** Creates a task; qaMode=true runs it in "Ask" mode (analysis only, no code changes). */
     async createTask(input: { environmentId: string; branch: string; prompt: string; qaMode?: boolean }): Promise<string> {
       const res = await call<{ task?: { id?: string }; id?: string }>('POST', '/wham/tasks', {

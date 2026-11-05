@@ -10,7 +10,7 @@ import { linkPublicRepo, listInstallTargets, listUserRepos, syncUserRepos } from
 import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
 import { cancelScan, createScan, loadPreferences, productIdForRepo, startProductScan } from '#/lib/scanner/engine'
 import { listFindings, listProductScans, listQuestions, listScans, scanDetail, scanProgress } from '#/lib/queries'
-import { codexClientFor, codexEnvironmentFor, openscanHost, settleInternetProbes, startInternetProbe } from '#/lib/codex/runtime'
+import { codexClientFor, codexEnvironmentFor, codexRunnerOf, openscanHost, setCodexRunner, settleInternetProbes, startInternetProbe } from '#/lib/codex/runtime'
 import { environmentsSettingsUrl } from '#/lib/codex/cloud'
 import {
   deleteProduct,
@@ -99,6 +99,7 @@ async function onboardingData(user: UserRow) {
     installations: installations.map((i) => ({ ...i, manageUrl: manageInstallationUrl(i.id, i.account_type, i.account_login) })),
     repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, private: Boolean(r.private), language: r.language, description: r.description, selected: Boolean(r.selected), understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at), codexNet: r.codex_net, codexNetAt: r.codex_net_at })),
     codexEnvironmentsUrl: environmentsSettingsUrl(),
+    codexRunner: codexRunnerOf(user),
     openscanHost: openscanHost(),
     reading: scans.map((s) => ({ ...s, repo: repos.find((r) => r.id === s.repo_id)?.full_name ?? '' })),
     questions: await listQuestions(user.id, ['open', 'auto_answered', 'answered'], selected),
@@ -238,6 +239,7 @@ async function dashboardData(user: UserRow) {
     user: publicUser(user),
     repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at) })),
     codexEnvironmentsUrl: environmentsSettingsUrl(),
+    codexRunner: codexRunnerOf(user),
     products: await Promise.all(
       (await listProducts(user.id)).map(async (p) => ({ id: p.id, name: p.name, repos: p.repos, pushRepos: p.push_repos, memory: await memoryStats(p.id) })),
     ),
@@ -322,6 +324,27 @@ export const refreshCodexEnvironments = createServerFn({ method: 'POST' }).handl
   for (const r of repos) if (await codexEnvironmentFor(user.id, r, client, true).catch(() => null)) found++
   return { ok: true as const, found, total: repos.length }
 })
+
+/** Every Codex environment in the user's workspace, for picking a runner environment. */
+export const listCodexEnvironments = createServerFn({ method: 'POST' }).handler(async () => {
+  const user = await requireUser()
+  const client = await codexClientFor(user)
+  if (!client) return { ok: false as const, reason: 'Link ChatGPT first' }
+  try {
+    const envs = await client.listEnvironments()
+    return { ok: true as const, envs: envs.map((e) => ({ id: e.id, label: e.label })) }
+  } catch (e) {
+    return { ok: false as const, reason: `Could not list Codex environments: ${String(e).slice(0, 160)}` }
+  }
+})
+
+/** Sets (or clears, with envId null) the environment used for repos without one of their own. */
+export const saveCodexRunner = createServerFn({ method: 'POST' })
+  .validator(z.object({ envId: z.string().min(1).max(200).nullable(), branch: z.string().max(200).regex(/^[A-Za-z0-9._/-]*$/, 'Not a branch name').default('main') }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    return setCodexRunner(user, data.envId ? { envId: data.envId, branch: data.branch } : null)
+  })
 
 /** Starts a tiny Codex task that checks whether the repo's environment can reach openscan. */
 export const testCodexInternet = createServerFn({ method: 'POST' })

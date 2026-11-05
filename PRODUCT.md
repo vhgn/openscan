@@ -15,7 +15,7 @@ Visitors are **engineering team leads and CTOs**. They don't want a 400-row scan
 3. **Sign-in and onboarding:**
    1. Log in with GitHub (GitHub App user authorization).
    2. Onboarding: select repositories, or update the GitHub App's repository selection on github.com and come back.
-   3. Log in with ChatGPT ([opencoredev/login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)). Inference runs on the user's own ChatGPT plan. **The agent work runs as Codex Cloud tasks** in the user's Codex environment for each repo (via the user's ChatGPT session). Repos without an environment fall back to direct ChatGPT review.
+   3. Log in with ChatGPT ([opencoredev/login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)). Inference runs on the user's own ChatGPT plan. **The agent work runs as Codex Cloud tasks** in the user's Codex environment for each repo (via the user's ChatGPT session). Repos without an environment run in the user's runner environment if they picked one (each task clones the repo first), else fall back to direct ChatGPT review.
    4. As soon as ChatGPT is connected, the AI **starts reading the selected repos** and **prepares questions**. It answers its own questions when later files settle them.
    5. **In parallel**, onboarding asks the user about **report frequency**, whether reports need **research behind them with a PoC**, focus areas, severity threshold, audience, and product context. These are saved as **user preferences**.
 4. **After onboarding**, the user waits for the AI to finish reading (if it hasn't already), with visible progress.

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createCodexClient, parseTaskDetails, pickEnvironment, taskUrl, CodexCloudError } from '../src/lib/codex/cloud.ts'
-import { huntPrompt, parseTaskOutput, reconPrompt, validatePrompt } from '../src/lib/codex/prompts.ts'
+import { CHECKOUT_DIR, checkoutFailure, cloneUrl, huntPrompt, parseTaskOutput, reconPrompt, redact, safeRepoName, validatePrompt } from '../src/lib/codex/prompts.ts'
 import { defaultPreferences } from '../src/lib/types.ts'
 
 function fakeFetch(routes: Record<string, (init?: RequestInit) => { status?: number; body: unknown }>) {
@@ -106,4 +106,50 @@ test('recon prompt: the agent settles code-behaviour questions itself, with the 
   const r = reconPrompt({ repo: 'acme/api', userContext: '', openQuestions: [] })
   assert.match(r.prompt, /settle every question about how the code behaves yourself/)
   assert.match(r.prompt, /Never ask how the code behaves/)
+})
+
+test('listEnvironments returns every environment in the workspace', async () => {
+  const f = fakeFetch({ 'GET https://chatgpt.com/backend-api/wham/environments': () => ({ body: [{ id: 'env_r', label: 'runner' }, { id: 'env_x' }] }) })
+  const c = createCodexClient({ accessToken: 't', accountId: 'a' }, f.fn)
+  assert.deepEqual(await c.listEnvironments(), [
+    { id: 'env_r', label: 'runner', isPinned: false, taskCount: 0 },
+    { id: 'env_x', label: null, isPinned: false, taskCount: 0 },
+  ])
+})
+
+test('runner prompts clone the repository under review before anything else', () => {
+  const checkout = { repo: 'acme/private-api', token: 'ghs_secret123' }
+  const h = huntPrompt({ repo: 'acme/private-api', prefs: defaultPreferences, profile: null, knownAnswers: [], openQuestions: [], alreadyFound: [], priorityFiles: [], checkout })
+  assert.match(h.prompt, /^OPENSCAN-ROLE: hunt/)
+  assert.match(h.prompt, /runner environment/)
+  assert.ok(h.prompt.includes(`git clone --depth 1 https://x-access-token:ghs_secret123@github.com/acme/private-api.git ${CHECKOUT_DIR}`))
+  assert.ok(h.prompt.includes(`remote set-url origin https://github.com/acme/private-api.git`))
+  assert.match(h.prompt, /CHECKOUT clone from github\.com is the one exception/)
+  assert.match(h.prompt, /Never print it/)
+  assert.match(h.prompt, /checkoutFailed/)
+  // The checkout step comes before the task itself.
+  assert.ok(h.prompt.indexOf('CHECKOUT (do this first)') < h.prompt.indexOf('TASK:'))
+
+  const pub = reconPrompt({ repo: 'acme/oss', userContext: '', openQuestions: [], checkout: { repo: 'acme/oss', token: null } })
+  assert.ok(pub.prompt.includes(`git clone --depth 1 https://github.com/acme/oss.git ${CHECKOUT_DIR}`))
+  assert.doesNotMatch(pub.prompt, /x-access-token|Never print it/)
+  const v = validatePrompt({ repo: 'acme/oss', prefs: defaultPreferences, profile: null, knownAnswers: [], findings: [], checkout: { repo: 'acme/oss', token: null } })
+  assert.match(v.prompt, /CHECKOUT \(do this first\)/)
+
+  // A repo with its own environment gets no checkout step.
+  const own = reconPrompt({ repo: 'acme/oss', userContext: '', openQuestions: [] })
+  assert.doesNotMatch(own.prompt, /CHECKOUT|git clone/)
+  assert.match(own.prompt, /review of THIS repository/)
+})
+
+test('checkout helpers: clone URL, failure report, redaction, safe names', () => {
+  assert.equal(cloneUrl({ repo: 'a/b', token: null }), 'https://github.com/a/b.git')
+  assert.equal(checkoutFailure(['working…', '{"checkoutFailed": "fatal: unable to access github.com: Could not resolve host"}']), 'fatal: unable to access github.com: Could not resolve host')
+  assert.equal(checkoutFailure(['{"findings": []}']), null)
+  assert.deepEqual(redact(['token ghs_x and ghs_x', 'none'], 'ghs_x'), ['token [redacted] and [redacted]', 'none'])
+  assert.deepEqual(redact(['a'], null), ['a'])
+  assert.ok(safeRepoName('acme/my-repo.js'))
+  assert.ok(!safeRepoName('acme/repo;rm -rf /'))
+  assert.ok(!safeRepoName('acme/$(id)'))
+  assert.ok(!safeRepoName('acme'))
 })

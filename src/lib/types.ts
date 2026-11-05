@@ -38,6 +38,10 @@ export interface UserRow {
   chatgpt_plan: string | null
   onboarding_step: OnboardingStep
   onboarded_at: number | null
+  /** Codex environment used for repos without one of their own (tasks clone the repo first). */
+  codex_runner_env_id?: string | null
+  codex_runner_env_label?: string | null
+  codex_runner_branch?: string | null
 }
 
 export interface RepoRow {

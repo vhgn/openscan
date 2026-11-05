@@ -164,11 +164,21 @@ Finally, point the GitHub App's URLs at the deployed `APP_URL`. Queues and cron 
 
 | Engine | When | How the AI work runs |
 | --- | --- | --- |
-| `codex` | ChatGPT linked **and** the user has a [Codex Cloud environment](https://chatgpt.com/codex/settings/environments) for the repo | Three Codex Cloud tasks per scan, run in Ask mode (read-only): **recon** (profile + questions), **hunt** (review the whole repo), and a separate **validate** task, which is a fresh agent that tries to refute each finding. Tasks are polled every 30 s via delayed queue messages. Task links appear on the report. |
-| `ai` | ChatGPT linked, no Codex environment (or a Codex task failed) | The Worker sends ranked file batches to ChatGPT through the login-with-chatgpt proxy. |
+| `codex` | ChatGPT linked **and** the user has a [Codex Cloud environment](https://chatgpt.com/codex/settings/environments) for the repo, or has picked a **runner environment** in Settings | Three Codex Cloud tasks per scan, run in Ask mode (read-only): **recon** (profile + questions), **hunt** (review the whole repo), and a separate **validate** task, which is a fresh agent that tries to refute each finding. Tasks are polled every 30 s via delayed queue messages. Task links appear on the report. |
+| `ai` | ChatGPT linked, no Codex environment and no runner (or a Codex task failed) | The Worker sends ranked file batches to ChatGPT through the login-with-chatgpt proxy. |
 | `heuristic` | ChatGPT not linked, or `AI_MODE=heuristic` | Deterministic rules plus OSV and runtime advisories only. |
 
-The Codex client (`src/lib/codex/cloud.ts`) uses the same ChatGPT backend endpoints as `codex cloud` (`/wham/environments/by-repo/…`, `/wham/tasks`). These are mirrored from `openai/codex` and are **not a documented public API**. Any Codex error (session expired, task failed or timed out, output not matching the JSON contract) logs a warning and falls back to the `ai` engine for that scan.
+The Codex client (`src/lib/codex/cloud.ts`) uses the same ChatGPT backend endpoints as `codex cloud` (`/wham/environments`, `/wham/environments/by-repo/…`, `/wham/tasks`). These are mirrored from `openai/codex` and are **not a documented public API**. Any Codex error (session expired, task failed or timed out, output not matching the JSON contract) logs a warning and falls back to the `ai` engine for that scan.
+
+#### Runner environment (repositories without their own environment)
+
+A Codex task always starts in an environment, and an environment always checks out its own repository; there is no repo-less task. So a user can pick one **runner environment** in Settings (`users.codex_runner_env_id`, plus the branch of the runner's own repository to check out). A repository's own environment always wins; the runner is used only when there is none. Each runner task:
+
+1. gets a CHECKOUT step at the top of its prompt (`checkoutBlock` in `src/lib/codex/prompts.ts`): `git clone --depth 1` of the repository under review into `/tmp/openscan-target`, then reset `origin` to the token-free URL, and review only that directory;
+2. for a private repository, carries a fresh GitHub App installation token limited to **that one repository** and `contents: read` (`readOnlyRepoToken`). The token is kept only encrypted in the scan state, revoked (`DELETE /installation/token`) as soon as the task finishes, times out or the scan stops, and redacted from the task output before anything is parsed or stored. GitHub expires it within the hour regardless. Public repositories are cloned without a token. A private repository without the GitHub App installed can't be cloned, so it falls back to the `ai` engine;
+3. reports `{"checkoutFailed": "…"}` if the clone fails, which falls back to the `ai` engine with a hint to turn on the runner's agent internet access and allowlist `github.com`.
+
+Trade-offs: the token appears in the prompt, so it is visible in the user's own Codex task history until it is revoked; the runner needs agent internet access (an environment per repository doesn't); and the runner's setup script prepares the runner's repository, not the cloned one, so agents review the code but generally can't run its tests.
 
 How one Codex task runs (`runCodexTask` in `src/lib/scanner/engine.ts`):
 
@@ -565,7 +575,7 @@ erDiagram
 
 `scans.product_id`, `scans.product_scan_id` and `questions.product_id` were added by `ALTER TABLE` without a foreign key; the link to `products` is kept in app code. `lwc_store` and `app_settings` stand alone.
 
-`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` (`scan_on_push`) · `product_scans` (one review of a product: trigger, pushed repo and commit) · `memory` · `preferences` · `scans` (one repository job: status/phase/progress/state/summary/skills/Codex tasks/product/product scan) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
+`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `users.codex_runner_*` (runner environment) · `products` · `product_repositories` (`scan_on_push`) · `product_scans` (one review of a product: trigger, pushed repo and commit) · `memory` · `preferences` · `scans` (one repository job: status/phase/progress/state/summary/skills/Codex tasks/product/product scan) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
 
 ### Identity, tokens and secrets
 
@@ -672,7 +682,7 @@ openscan is a proof of concept, not a ready product; see the [README](../README.
 
 ### Known limitations
 
-- **Codex Cloud** uses undocumented ChatGPT backend endpoints, the same ones `codex cloud` uses, so they may change. Each user must create a Codex environment per repository at chatgpt.com/codex. The Codex path has not been verified against a real ChatGPT account.
+- **Codex Cloud** uses undocumented ChatGPT backend endpoints, the same ones `codex cloud` uses, so they may change. Each user must create a Codex environment per repository at chatgpt.com/codex, or one runner environment (with agent internet access to github.com) that clones each repository. The Codex path has not been verified against a real ChatGPT account.
 
 - **Verified in the build sandbox:** demo login, repo selection, preferences, the understand scan, the security scan with real OSV results, the dashboard, the report, the REST API, cron, the production build, and `wrangler deploy --dry-run`. **Verified manually** by the owner across different repositories and accounts: the ChatGPT device-login approval and AI-mode scans, GitHub App install/OAuth, and webhooks.
 - Large monorepos: only the top-ranked files are reviewed (30 to 50 per scan by depth). Truncated trees are noted in scan state.

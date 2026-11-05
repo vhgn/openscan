@@ -2,6 +2,10 @@
  * Prompts + output contracts for Codex Cloud tasks. The agent runs in the user's
  * Codex environment with the repository checked out, so instead of feeding file
  * batches we hand it the methodology (skill playbooks) and a JSON contract.
+ *
+ * In a runner environment (one environment for every repo without its own), Codex
+ * checks out the runner's repository, so the prompt starts with a CHECKOUT step that
+ * clones the repository under review into CHECKOUT_DIR.
  */
 import { z } from 'zod'
 import * as A from '../ai/agents'
@@ -12,6 +16,58 @@ import type { Preferences, RepoProfile } from '../types'
 import { memoryPromptBlock, type MemoryApi } from './memory-api'
 
 export type CodexRole = 'recon' | 'hunt' | 'validate'
+
+/** Where a runner task clones the repository under review. */
+export const CHECKOUT_DIR = '/tmp/openscan-target'
+
+/** Clone instructions for a task running in a runner environment. */
+export interface Checkout {
+  /** owner/name of the repository under review (its default branch is cloned). */
+  repo: string
+  /** Read-only GitHub token for private repos (expires within the hour); null for public repos. */
+  token: string | null
+}
+
+/** GitHub owner/name characters only, so the name is safe inside a shell command. */
+export function safeRepoName(fullName: string): boolean {
+  return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fullName)
+}
+
+export function cloneUrl(c: Checkout): string {
+  return c.token ? `https://x-access-token:${c.token}@github.com/${c.repo}.git` : `https://github.com/${c.repo}.git`
+}
+
+/** Prompt section for runner tasks. Pure. */
+export function checkoutBlock(c: Checkout): string {
+  return `CHECKOUT (do this first): this Codex environment is a shared runner. The repository it starts in is NOT the one under review; ignore it entirely.
+Clone the repository under review and work only there:
+  git clone --depth 1 ${cloneUrl(c)} ${CHECKOUT_DIR}
+  git -C ${CHECKOUT_DIR} remote set-url origin https://github.com/${c.repo}.git
+  cd ${CHECKOUT_DIR}
+Every path you cite is relative to ${CHECKOUT_DIR}.${c.token ? `
+The clone URL carries a read-only GitHub token for this task only; it is revoked when the task ends. Never print it, write it anywhere else, use it for anything but this clone, or include it in your final message.` : ''}
+If the clone fails (no network, DNS, proxy or auth error), retry at most once, do not look for other ways to get the code, and make your final message ONLY {"checkoutFailed": "<the git error, max 200 chars, without any token>"}.`
+}
+
+const checkoutFailed = z.object({ checkoutFailed: z.string() })
+
+/** The clone error a runner task reported instead of doing its work, or null. Pure. */
+export function checkoutFailure(messages: string[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    try {
+      const parsed = checkoutFailed.safeParse(extractJson(messages[i]))
+      if (parsed.success) return parsed.data.checkoutFailed.slice(0, 200) || 'clone failed'
+    } catch {
+      // not JSON
+    }
+  }
+  return null
+}
+
+/** Removes a secret from task output before anything is parsed or stored. Pure. */
+export function redact(messages: string[], secret: string | null | undefined): string[] {
+  return secret ? messages.map((m) => m.split(secret).join('[redacted]')) : messages
+}
 
 /** Product memory for a task: the inline summary always, plus the API when a token was issued. */
 export interface TaskMemory {
@@ -35,26 +91,31 @@ export const validateTaskOutput = z.object({ verdicts: z.array(A.validateOutput.
 const CONTRACT = { recon: reconTaskOutput, hunt: huntTaskOutput, validate: validateTaskOutput } as const
 export type TaskOutput<R extends CodexRole> = z.infer<(typeof CONTRACT)[R]>
 
-function rules(role: CodexRole) {
+function rules(role: CodexRole, checkout?: Checkout | null) {
   const schema = JSON.stringify(z.toJSONSchema(CONTRACT[role]))
+  const where = checkout
+    ? `inside the repository owner's Codex runner environment, authorised by them for a defensive security review of ${checkout.repo} (cloned in the CHECKOUT step below)`
+    : `inside the repository owner's Codex environment, authorised by them for a defensive security review of THIS repository`
   return `OPENSCAN-ROLE: ${role}
-You are running as an openscan agent inside the repository owner's Codex environment, authorised by them for a defensive security review of THIS repository.
+You are running as an openscan agent ${where}.
 Rules:
 - Read-only analysis. Do not modify files, commit, push or open a pull request.
-- Use the repository and local tooling only (grep, ripgrep, reading files, running existing tests in the sandbox if useful). Never contact deployed systems or third-party services, and never use real credentials.
+- Use the repository and local tooling only (grep, ripgrep, reading files, running existing tests in the sandbox if useful). Never contact deployed systems or third-party services${checkout ? ' (the CHECKOUT clone from github.com is the one exception)' : ''}, and never use real credentials.
 - Cite repository-relative paths and line numbers for every claim.
 ${CODEX_DATA_POLICY}
 
 ${DATA_POLICY}
 - Your FINAL message must be ONLY one JSON object (no prose, no markdown fences) that validates against this JSON Schema:
-${schema}`
+${schema}${checkout ? `
+
+${checkoutBlock(checkout)}` : ''}`
 }
 
-export function reconPrompt(input: { repo: string; userContext: string; openQuestions: Array<{ id: string; question: string }>; skippedQuestions?: string[]; memory?: TaskMemory }) {
+export function reconPrompt(input: { repo: string; userContext: string; openQuestions: Array<{ id: string; question: string }>; skippedQuestions?: string[]; memory?: TaskMemory; checkout?: Checkout | null }) {
   const pb = reconPlaybook()
   return {
     skills: pb.skills,
-    prompt: `${rules('recon')}
+    prompt: `${rules('recon', input.checkout)}
 
 TASK: Build the repository profile a security reviewer will rely on, and list the questions only the owner can answer.
 ${A.PROFILE_SYSTEM}
@@ -84,13 +145,14 @@ export function huntPrompt(input: {
   priorityFiles: string[]
   skippedQuestions?: string[]
   memory?: TaskMemory
+  checkout?: Checkout | null
 }) {
   const pb = huntPlaybook({ differential: Boolean(input.changed?.length), paths: input.priorityFiles })
   const d = dataFence()
   const depth = input.prefs.depth === 'triage' ? 'a fast pass over the riskiest areas' : input.prefs.depth === 'deep_poc' ? 'a deep review; follow every untrusted input to its sinks' : 'a thorough review of the main attack surface'
   return {
     skills: [...new Set([...pb.skills, 'tob-agentic-actions-auditor', 'nvidia-skillspector'])],
-    prompt: `${rules('hunt')}
+    prompt: `${rules('hunt', input.checkout)}
 ${d.header}
 
 TASK: ${depth}. Find real, exploitable vulnerabilities in this repository.
@@ -120,12 +182,13 @@ export function validatePrompt(input: {
   knownAnswers: Array<{ question: string; answer: string }>
   findings: Array<{ index: number; severity: string; title: string; file: string | null; line: number | null; description: string; threatModel: string | null; trace: string[] }>
   memory?: TaskMemory
+  checkout?: Checkout | null
 }) {
   const pb = validatePlaybook()
   const d = dataFence()
   return {
     skills: pb.skills,
-    prompt: `${rules('validate')}
+    prompt: `${rules('validate', input.checkout)}
 ${d.header}
 
 TASK: Independently validate each finding below. Another agent wrote them; you have the full repository to refute them. Assess each one separately (do not let one verdict influence another), and return one verdict per index.
