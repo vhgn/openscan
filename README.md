@@ -2,17 +2,35 @@
 
 **AI security review for your GitHub repositories.** openscan reads a repo the way an attacker would and writes a short brief: what matters, what is risky, and what to do next.
 
-Live at [openscan.underscore.am](https://openscan.underscore.am). Brief: [TASK.md](./TASK.md). Product spec: [PRODUCT.md](./PRODUCT.md). How to run, deploy and change it: [docs/TECHNICAL.md](./docs/TECHNICAL.md). Screens: [`docs/screens/`](./docs/screens).
+Live at [openscan.underscore.am](https://openscan.underscore.am). Brief: [TASK.md](./TASK.md). Product spec: [PRODUCT.md](./PRODUCT.md). How to deploy and change it: [docs/TECHNICAL.md](./docs/TECHNICAL.md). API: [`public/openapi.json`](./public/openapi.json). Screens: [`docs/screens/`](./docs/screens).
+
+> **A proof of concept, not a ready product.** There are no evals yet: those need security researchers, and were skipped on purpose. [More below](#status-a-proof-of-concept-not-a-product).
+
+## Run it locally
+
+Node.js 22+. No Cloudflare account needed.
 
 ```bash
-npm install && cp .dev.vars.example .dev.vars   # set SESSION_SECRET, LWC_SECRET, DEV_DEMO_LOGIN=1
+npm install
 ```
 
 ```bash
-npm run db:migrate:local && npm run dev
+npm run setup
 ```
 
-Then open `http://localhost:3000/api/dev/login?repos=OWASP/NodeGoat` and follow the onboarding.
+```bash
+npm run dev
+```
+
+Open http://localhost:3000. `npm run setup` creates `.dev.vars`, generates the secrets, checks your GitHub App credentials with GitHub and migrates the local database. If credentials are missing it tells you which; [docs/github-app.md](./docs/github-app.md) shows how to create them in about 5 minutes. To try it without a GitHub App, run `npm run setup -- --demo` and open `http://localhost:3000/api/dev/login?repos=OWASP/NodeGoat`.
+
+## Status: a proof of concept, not a product
+
+openscan shows the whole flow on real repositories, but it has not been hardened, load-tested or measured.
+
+**Evals were skipped intentionally.** Saying whether a review is good means measuring it: which real vulnerabilities it finds, how many findings are wrong, whether severities and proofs of concept hold up, and how that moves as prompts, skills and models change. That needs a ground-truth corpus (repos with known and seeded vulnerabilities, findings adjudicated by people who do this for a living, a scoring rubric they agree on). That is work for **security researchers**, not something to improvise in a POC. The unit tests cover the deterministic parts, not the quality of AI findings.
+
+**Why "Login with ChatGPT".** Scans run on each user's own ChatGPT plan. It keeps the implementation simple (no model keys, billing or quotas for us to run) and lets anyone in public run scans without the operator paying for them.
 
 ## How we read the brief
 
@@ -20,7 +38,7 @@ The customer asked for three things, and each one shaped the product:
 
 - **"Not a raw scanner report."** The output is a *brief*: overall risk in one sentence, what matters, numbered next actions, then findings in fix order. A second agent tries to disprove each serious finding. The report marks it verified, needs validation, or rejected.
 - **"Understand what matters."** Risk depends on facts the code can't show, such as whether the service is public and what data it holds. The AI asks about these while it reads, answers its own questions when later files settle them, and shows the user only the rest. Answers are reused, so it never asks twice. Onboarding also records preferences: frequency, depth, focus, severity threshold and audience.
-- **"A product experience, not just an API."** You sign in with GitHub, install a read-only GitHub App, link ChatGPT and watch the first read with live progress. Then you land on a one-page dashboard, and scans run on a schedule or on push. A REST API (`/api/scans`) exists as a secondary way in.
+- **"A product experience, not just an API."** You sign in with GitHub, install a read-only GitHub App, link ChatGPT and watch the first read with live progress. Then you land on a one-page dashboard, and scans run on a schedule or on push. A REST API (`/api/scans`, spec in [`public/openapi.json`](./public/openapi.json)) exists as a secondary way in.
 
 "Code or dependencies" became both: AI code review plus dependency data from OSV.dev. The reader is an engineering lead or CTO who wants a defensible plan, not 400 rows.
 
@@ -28,8 +46,8 @@ The customer asked for three things, and each one shaped the product:
 
 | We chose | Instead of | Why, and what it cost |
 | --- | --- | --- |
-| **GitHub App** install | Pasting a repo URL | Private repos need access anyway, and scans can run while the user is offline. Costs more setup. Public `owner/repo` still works in demo mode. |
-| **User's own ChatGPT plan** ([login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)) | Our API key | No inference bill or keys. Costs a dependency on a young SDK and a 120 requests/min limit. |
+| **GitHub App** install | Pasting a repo URL | Private repos need access anyway, and scans can run while the user is offline. Costs more setup. Any public `owner/repo` (or GitHub link) can still be typed in and scanned without the app. |
+| **User's own ChatGPT plan** ([login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)) | Our API key | Simplest to build, no inference bill or keys, and anyone in public can run scans on their own plan. Costs a dependency on a young SDK and a 120 requests/min limit. |
 | **Codex Cloud tasks** when a Codex environment exists | File batches only | The agent sees the whole repo, not the top 30 to 50 files. Uses undocumented endpoints; falls back to direct review. |
 | **Workers + D1 + Queues** (TypeScript, `nodejs_compat`) | A Node server with long jobs | One cheap deploy. Scans become small retryable steps, and a cron revives stalled ones. Not a plain Node process. |
 | **Validator agent** per serious finding | Reporting everything | Fewer false alarms; slower scans, more tokens. |

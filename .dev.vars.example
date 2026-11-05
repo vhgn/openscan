@@ -1,9 +1,9 @@
-# Copy to .dev.vars for local development (never commit .dev.vars).
-# Generate secrets with: openssl rand -hex 32
+# Local settings. `npm run setup` copies this to .dev.vars (never commit .dev.vars),
+# generates the secrets below and checks the GitHub values with GitHub.
 SESSION_SECRET=replace-me-with-64-hex-chars
 LWC_SECRET=replace-me-with-64-hex-chars
 
-# GitHub App (https://github.com/settings/apps/new) — see docs/TECHNICAL.md
+# GitHub App: how to create one and where each value is, in docs/github-app.md
 GITHUB_APP_ID=123456
 GITHUB_CLIENT_ID=Iv23liXXXXXXXXXXXXXX
 GITHUB_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
