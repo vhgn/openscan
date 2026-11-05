@@ -4,7 +4,8 @@ const serif = "font-['Newsreader',ui-serif,Georgia,serif]"
 const display = "font-['Instrument_Serif',ui-serif,Georgia,serif]"
 
 function Mark({ children }: { children: React.ReactNode }) {
-  return <mark className="bg-[linear-gradient(transparent_55%,#fde68a_55%,#fde68a_92%,transparent_92%)] px-0.5 text-inherit">{children}</mark>
+  // Cream squiggle underline (wavy text-decoration) instead of a highlighter fill.
+  return <mark className="bg-transparent text-inherit underline decoration-[#e3c98b] decoration-wavy decoration-2 underline-offset-[6px] [text-decoration-skip-ink:none]">{children}</mark>
 }
 
 function Note({ n, children }: { n: number; children: React.ReactNode }) {

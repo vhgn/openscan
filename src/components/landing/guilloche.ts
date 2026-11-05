@@ -1,4 +1,4 @@
-/** Deterministic security-printing geometry (guilloche rosettes, rays, engraved eye) as SVG path data. */
+/** Deterministic security-printing geometry: guilloche rosettes as SVG path data. */
 
 const f = (n: number) => (Math.round(n * 10) / 10).toString()
 
@@ -22,38 +22,4 @@ export function rosette(cx: number, cy: number, R: number, r: number, d: number,
 
 function gcd(a: number, b: number): number {
   return b ? gcd(b, a % b) : a
-}
-
-/** Engraved sunburst: alternating long/short rays. */
-export function rays(cx: number, cy: number, r0: number, r1: number, n: number): string {
-  let p = ''
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2
-    const r = i % 2 ? r1 * 0.9 : r1
-    p += `M${f(cx + Math.cos(a) * r0)} ${f(cy + Math.sin(a) * r0)}L${f(cx + Math.cos(a) * r)} ${f(cy + Math.sin(a) * r)}`
-  }
-  return p
-}
-
-/** Almond eye outline (two arcs) centred on cx,cy. */
-export function eyeOutline(cx: number, cy: number, w: number, h: number): string {
-  return `M${f(cx - w)} ${f(cy)}Q${f(cx)} ${f(cy - h * 2)} ${f(cx + w)} ${f(cy)}Q${f(cx)} ${f(cy + h * 2)} ${f(cx - w)} ${f(cy)}Z`
-}
-
-/** Horizontal engraving hatch inside a box; clip it with the eye outline. */
-export function hatch(x0: number, y0: number, x1: number, y1: number, gap: number): string {
-  let p = ''
-  for (let y = y0; y <= y1; y += gap) p += `M${f(x0)} ${f(y)}L${f(x1)} ${f(y)}`
-  return p
-}
-
-/** Iris: radial fibres between two radii with slight jitter for an engraved look. */
-export function iris(cx: number, cy: number, r0: number, r1: number, n: number): string {
-  let p = ''
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2
-    const j = 0.92 + 0.08 * Math.sin(i * 12.9898)
-    p += `M${f(cx + Math.cos(a) * r0)} ${f(cy + Math.sin(a) * r0)}L${f(cx + Math.cos(a) * r1 * j)} ${f(cy + Math.sin(a) * r1 * j)}`
-  }
-  return p
 }
