@@ -1,7 +1,7 @@
 /** The scan state machine (src/lib/scanner/engine.ts) against an in-memory D1 and stubbed GitHub/OSV. */
 import { afterEach, beforeEach, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createScan, runStep, scheduledTick, startProductScan } from '#/lib/scanner/engine'
+import { createScan, reviveStalledScans, runStep, scheduledTick, startProductScan, waitingOnLiveCodexTask } from '#/lib/scanner/engine'
 import { saveProduct } from '#/lib/products'
 import {
   assertNoUnexpectedFetch,
@@ -278,6 +278,28 @@ describe('runStep: retries and failure', () => {
     assert.equal(events(t, id).length, log.length)
   })
 
+  test('a crash while setting up the step (before the step body) uses an attempt instead of escaping', async () => {
+    const user = insertUser(t)
+    const repo = insertRepo(t, { id: 1, fullName: 'acme/shop', users: [{ id: user }] })
+    const id = await createScan(user, repo, 'security', 'manual')
+    // loadPreferences runs during setup; without its table it throws.
+    t.db.write('DROP TABLE preferences')
+    t.queue.shift()
+    await runStep(id) // must not reject
+    let row = scanRow(t, id)
+    assert.deepEqual([row.status, row.attempts], ['running', 1])
+    assert.equal(row.lease_id, null, 'the lease is released')
+    assert.deepEqual(t.queue, [{ scanId: id, delaySeconds: 10 }])
+    t.queue.shift()
+    await runStep(id)
+    t.queue.shift()
+    await runStep(id)
+    row = scanRow(t, id)
+    assert.equal(row.status, 'failed')
+    assert.match(row.error!, /no such table: preferences/)
+    assert.deepEqual(t.queue, [])
+  })
+
   test('a successful step resets the attempt counter', async () => {
     const user = insertUser(t)
     const repo = insertRepo(t, { id: 1, fullName: 'acme/shop', users: [{ id: user }] })
@@ -427,7 +449,7 @@ describe('scheduledTick', () => {
     assert.deepEqual(scheduled(), [])
   })
 
-  test('re-enqueues stalled scans (no progress for 10 minutes)', async () => {
+  test('re-enqueues stalled scans (no progress for 10 minutes), using an attempt', async () => {
     const user = insertUser(t, { onboarded: false })
     const repo = insertRepo(t, { id: 1, fullName: 'acme/shop', users: [{ id: user }] })
     const stalled = await createScan(user, repo, 'security', 'manual')
@@ -436,6 +458,103 @@ describe('scheduledTick', () => {
     t.db.write('UPDATE scans SET updated_at = ? WHERE id = ?', Date.now() - 11 * 60_000, stalled)
     await scheduledTick()
     assert.deepEqual(t.queue, [{ scanId: stalled }])
+    const row = scanRow(t, stalled)
+    assert.deepEqual([row.status, row.attempts, row.lease_id], ['queued', 1, null])
+    assert.ok(row.updated_at > Date.now() - 60_000, 'revival counts as activity, so the next tick waits again')
     assert.equal(scanRow(t, fresh).status, 'queued')
+    assert.equal(scanRow(t, fresh).attempts, 0)
+  })
+})
+
+describe('reviveStalledScans: limited by attempts', () => {
+  const STALE = 11 * 60_000
+
+  function stall(id: string) {
+    t.db.write('UPDATE scans SET updated_at = ? WHERE id = ?', Date.now() - STALE, id)
+  }
+
+  async function stalledScan() {
+    const user = insertUser(t, { onboarded: false })
+    const repo = insertRepo(t, { id: 1, fullName: 'acme/shop', users: [{ id: user }] })
+    const id = await createScan(user, repo, 'security', 'manual')
+    t.queue.length = 0
+    return id
+  }
+
+  /** Puts the scan in the Codex hunt wait phase, the task started `ageMs` ago with `status`. */
+  function codexWait(id: string, status: string, ageMs: number) {
+    const state = { codex: { envId: 'env', envLabel: null, tasks: { hunt: { id: 'task_1', startedAt: Date.now() - ageMs, status } } } }
+    t.db.write(`UPDATE scans SET status = 'running', engine = 'codex', phase = 'codex_hunt_wait', state_json = ? WHERE id = ?`, JSON.stringify(state), id)
+  }
+
+  test('a scan that keeps stalling fails after 3 revivals instead of looping forever', async () => {
+    const id = await stalledScan()
+    for (const attempt of [1, 2]) {
+      stall(id)
+      await reviveStalledScans()
+      assert.deepEqual(t.queue.splice(0), [{ scanId: id }])
+      assert.equal(scanRow(t, id).attempts, attempt)
+    }
+    stall(id)
+    await reviveStalledScans()
+    const row = scanRow(t, id)
+    assert.equal(row.status, 'failed')
+    assert.match(row.error!, /made no progress for 11 min, 3 times in a row/)
+    assert.equal(row.lease_id, null)
+    assert.deepEqual(t.queue, [], 'a failed scan is not re-enqueued')
+    assert.deepEqual(
+      events(t, id).filter((e) => e.level !== 'info').map((e) => e.message.replace(/ for \d+ min/, '')),
+      [
+        'Step "queued" made no progress (attempt 1/3); retrying',
+        'Step "queued" made no progress (attempt 2/3); retrying',
+        'Scan failed: Step "queued" made no progress, 3 times in a row',
+      ],
+    )
+  })
+
+  test('failed steps and revivals share the attempt budget', async () => {
+    const id = await stalledScan()
+    t.db.write('UPDATE scans SET attempts = 2 WHERE id = ?', id)
+    stall(id)
+    await reviveStalledScans()
+    assert.equal(scanRow(t, id).status, 'failed')
+  })
+
+  test('waiting on a live Codex task: revived without using attempts, as often as needed', async () => {
+    const id = await stalledScan()
+    for (const status of ['running', 'pending', 'in_progress', 'in_progress', 'in_progress']) {
+      codexWait(id, status, 20 * 60_000)
+      stall(id)
+      await reviveStalledScans()
+      assert.deepEqual(t.queue.splice(0), [{ scanId: id }])
+      const row = scanRow(t, id)
+      assert.deepEqual([row.status, row.attempts], ['running', 0], status)
+    }
+    assert.ok(events(t, id).some((e) => /Codex task is still running; resuming polling/.test(e.message)))
+  })
+
+  test('a Codex task past its timeout, finished, or in an unknown state counts as stuck', async () => {
+    for (const [status, age] of [
+      ['in_progress', 50 * 60_000],
+      ['unknown', 5 * 60_000],
+      ['completed', 5 * 60_000],
+    ] as const) {
+      t = resetEnv()
+      const id = await stalledScan()
+      codexWait(id, status, age)
+      stall(id)
+      await reviveStalledScans()
+      assert.equal(scanRow(t, id).attempts, 1, `${status} after ${age / 60_000} min`)
+    }
+  })
+
+  test('waitingOnLiveCodexTask only applies to the Codex engine in a wait phase', () => {
+    const at = Date.now()
+    const state = (status: string, age = 60_000) => JSON.stringify({ codex: { envId: 'e', envLabel: null, tasks: { recon: { id: 'x', startedAt: at - age, status } } } })
+    assert.equal(waitingOnLiveCodexTask({ engine: 'codex', phase: 'codex_recon_wait', state_json: state('in_progress') }, at), true)
+    assert.equal(waitingOnLiveCodexTask({ engine: 'ai', phase: 'codex_recon_wait', state_json: state('in_progress') }, at), false)
+    assert.equal(waitingOnLiveCodexTask({ engine: 'codex', phase: 'codex_recon', state_json: state('in_progress') }, at), false)
+    assert.equal(waitingOnLiveCodexTask({ engine: 'codex', phase: 'codex_hunt_wait', state_json: state('in_progress') }, at), false, 'no hunt task')
+    assert.equal(waitingOnLiveCodexTask({ engine: 'codex', phase: 'codex_recon_wait', state_json: '{}' }, at), false)
   })
 })

@@ -238,6 +238,8 @@ export function scanRow(t: TestEnv, scanId: string) {
     phase: string
     progress: number
     attempts: number
+    lease_id: string | null
+    updated_at: number
     engine: string | null
     model: string | null
     trigger: string

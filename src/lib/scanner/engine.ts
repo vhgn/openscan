@@ -242,6 +242,22 @@ export async function runStep(scanId: string): Promise<void> {
 async function leasedStep(scanId: string, leaseId: string): Promise<number | null> {
   const scan = await first<ScanRow>('SELECT * FROM scans WHERE id = ?', scanId)
   if (!scan || scan.status === 'completed' || scan.status === 'failed') return null
+  // Everything after loading the scan counts as the step: a crash while setting it up
+  // (loading the user, preferences, product) uses an attempt like any other failure,
+  // instead of escaping to the queue and being revived by the cron forever.
+  try {
+    return await runLoadedStep(scan, leaseId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const attempts = scan.attempts + 1
+    await logEvent(scan.id, `Step "${scan.phase}" failed (attempt ${attempts}/${MAX_ATTEMPTS}): ${message.slice(0, 300)}`, 'error')
+    if (attempts >= MAX_ATTEMPTS) return fail(scan, leaseId, message)
+    if (!(await exec('UPDATE scans SET attempts = ?, updated_at = ? WHERE id = ? AND lease_id = ?', attempts, now(), scan.id, leaseId))) return lostLease(scan)
+    return 10 * attempts
+  }
+}
+
+async function runLoadedStep(scan: ScanRow, leaseId: string): Promise<number | null> {
   const user = await first<UserRow>('SELECT * FROM users WHERE id = ?', scan.user_id)
   const repo = await getRepo(scan.repo_id)
   if (!user || !repo) return fail(scan, leaseId, 'User or repository no longer exists')
@@ -269,7 +285,7 @@ async function leasedStep(scanId: string, leaseId: string): Promise<number | nul
     ctx.product = await productForRepo(user.id, repo.id)
   }
 
-  try {
+  {
     ctx.llm = await resolveEngine(ctx)
     // Polling a running Codex task never builds a prompt, so it needs no memory.
     const polling = scan.engine === 'codex' && scan.phase.endsWith('_wait')
@@ -294,13 +310,6 @@ async function leasedStep(scanId: string, leaseId: string): Promise<number | nul
       return null
     }
     return result.delay ?? 0
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    const attempts = scan.attempts + 1
-    await logEvent(scan.id, `Step "${scan.phase}" failed (attempt ${attempts}/${MAX_ATTEMPTS}): ${message.slice(0, 300)}`, 'error')
-    if (attempts >= MAX_ATTEMPTS) return fail(scan, leaseId, message)
-    if (!(await exec('UPDATE scans SET attempts = ?, updated_at = ? WHERE id = ? AND lease_id = ?', attempts, now(), scan.id, leaseId))) return lostLease(scan)
-    return 10 * attempts
   }
 }
 
@@ -979,6 +988,8 @@ async function runCodexTask<R extends CP.CodexRole>(
     const task = state.codex.tasks[role]
     if (!task) return { step: await codexFallback(ctx, `lost ${role} task id`) }
     const res = await client.getTask(task.id)
+    // Saved with the step: the cron reads it to tell a live Codex task from a stuck scan.
+    task.status = res.status
     if (res.status === 'pending' || res.status === 'in_progress' || res.status === 'unknown') {
       if (now() - task.startedAt > CODEX_TIMEOUT_MS) {
         await finishTaskToken(ctx, role, undefined)
@@ -1284,11 +1295,59 @@ function emptyStats(): Record<Severity, number> {
 
 const INTERVAL: Record<string, number> = { daily: 86_400_000, weekly: 7 * 86_400_000, monthly: 30 * 86_400_000 }
 
+/** Codex task statuses that mean it is still queued or running at Codex (`running`: started, not polled yet). */
+const CODEX_LIVE = ['running', 'pending', 'in_progress']
+
+/**
+ * The scan is polling a Codex task that, as of its last poll, is still queued or running and
+ * within the Codex timeout. Its polls stopping is our problem, not the task's, so reviving it is
+ * not a retry. A task in an unknown state, finished, or past the timeout counts as stuck.
+ */
+export function waitingOnLiveCodexTask(scan: Pick<ScanRow, 'engine' | 'phase' | 'state_json'>, at: number): boolean {
+  const role = /^codex_(\w+)_wait$/.exec(scan.phase)?.[1] as CP.CodexRole | undefined
+  if (scan.engine !== 'codex' || !role) return false
+  const task = parseJson<ScanState>(scan.state_json, {}).codex?.tasks[role]
+  return Boolean(task && CODEX_LIVE.includes(task.status ?? '') && at - task.startedAt < CODEX_TIMEOUT_MS)
+}
+
+/**
+ * Cron: re-enqueue scans that made no progress for STALL_MS and hold no live lease (the worker
+ * died, or the next step's message was lost). Each revival uses an attempt, like a failed step,
+ * and the scan fails after MAX_ATTEMPTS, so a step that kills its worker can't loop forever.
+ * Exception: a scan waiting on a live Codex task is re-enqueued without using an attempt.
+ */
+export async function reviveStalledScans(at = now()): Promise<void> {
+  const stalled = await all<{ id: string }>(STALLED_SCANS_SQL, at - STALL_MS, at)
+  for (const { id } of stalled) {
+    const leaseId = uid()
+    if (!(await acquireLease(exec, id, leaseId, at))) continue // picked up meanwhile
+    let requeue = false
+    try {
+      const scan = await first<ScanRow>('SELECT * FROM scans WHERE id = ?', id)
+      if (!scan) continue // nothing to requeue
+      const idle = Math.round((at - scan.updated_at) / 60_000)
+      const attempts = scan.attempts + 1
+      if (waitingOnLiveCodexTask(scan, at)) {
+        await exec('UPDATE scans SET updated_at = ? WHERE id = ? AND lease_id = ?', at, id, leaseId)
+        await logEvent(id, `No progress for ${idle} min while the Codex task is still running; resuming polling`, 'warn')
+        requeue = true
+      } else if (attempts >= MAX_ATTEMPTS) {
+        await fail(scan, leaseId, `Step "${scan.phase}" made no progress for ${idle} min, ${attempts} times in a row`)
+      } else {
+        await exec('UPDATE scans SET attempts = ?, updated_at = ? WHERE id = ? AND lease_id = ?', attempts, at, id, leaseId)
+        await logEvent(id, `Step "${scan.phase}" made no progress for ${idle} min (attempt ${attempts}/${MAX_ATTEMPTS}); retrying`, 'warn')
+        requeue = true
+      }
+    } finally {
+      await releaseLease(exec, id, leaseId)
+    }
+    if (requeue) await enqueue(id)
+  }
+}
+
 /** Cron: start recurring reports per user preference + revive stalled scans. */
 export async function scheduledTick(): Promise<void> {
-  // A scan whose step is still running holds a live lease, so it is not re-enqueued.
-  const stalled = await all<{ id: string }>(STALLED_SCANS_SQL, now() - STALL_MS, now())
-  for (const s of stalled) await enqueue(s.id)
+  await reviveStalledScans()
 
   const users = await all<{ id: string; json: string }>(
     `SELECT u.id, p.json FROM users u JOIN preferences p ON p.user_id = u.id WHERE u.onboarded_at IS NOT NULL`,
