@@ -2,7 +2,7 @@
 
 **AI security review for your GitHub repositories.** openscan reads a repo the way an attacker would and writes a short brief: what matters, what is risky, and what to do next.
 
-Live at [openscan.underscore.am](https://openscan.underscore.am). Brief: [TASK.md](./TASK.md). Product spec: [PRODUCT.md](./PRODUCT.md). How to deploy and change it: [docs/TECHNICAL.md](./docs/TECHNICAL.md). API: [`public/openapi.json`](./public/openapi.json). Screens: [`docs/screens/`](./docs/screens).
+Live at [openscan.underscore.am](https://openscan.underscore.am). Brief: [TASK.md](./TASK.md). Product spec: [PRODUCT.md](./PRODUCT.md). How to deploy and change it: [docs/TECHNICAL.md](./docs/TECHNICAL.md). How it was built with coding agents: [PROCESS.md](./PROCESS.md). API: [`public/openapi.json`](./public/openapi.json). Screens: [`docs/screens/`](./docs/screens).
 
 > **A proof of concept, not a ready product.** There are no evals yet: those need security researchers, and were skipped on purpose. [More below](#status-a-proof-of-concept-not-a-product).
 
@@ -69,6 +69,33 @@ The customer asked for three things, and each one shaped the product:
 ## How the coding agent helped, and where it went wrong
 
 The project was built with **Claude Code** as a pair programmer. The product owner made the product calls: flow, audience, naming and design.
+
+It took 14 Claude Code cloud sessions on 5 November 2026: one long build session, then up to seven parallel sessions, each on one feature, fix or question. [PROCESS.md](./PROCESS.md) has the session-by-session account and every decision the product owner made.
+
+```mermaid
+gantt
+    title Sessions on 5 Nov 2026 (UTC), grouped by intent
+    dateFormat HH:mm
+    axisFormat %H:%M
+    section Building
+    Main build (since 09.26)        :19:40, 20:16
+    Product owns scans              :20:16, 20:39
+    Questions for you               :20:19, 20:40
+    Public repo submission          :20:22, 21:11
+    section Understanding
+    Architecture diagrams           :19:44, 20:09
+    Take-home improvements          :19:45, 20:24
+    Codex memories                  :19:54, 20:47
+    runStep walkthrough             :20:29, 20:40
+    section Polishing
+    App URL and UI polish           :19:44, 20:18
+    Card density                    :19:55, 20:09
+    Scope cut, README and merges    :active, 20:28, 21:14
+    section Fixing
+    Cascade delete fix              :20:27, 20:36
+    Malformed session cookie        :20:57, 21:09
+    Findings lost on rescan         :20:57, 21:11
+```
 
 **Where it helped**
 
