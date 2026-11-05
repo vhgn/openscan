@@ -16,6 +16,7 @@ import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SkillsRouteImport } from './routes/skills'
 import { Route as ProductsProductIdRouteImport } from './routes/products.$productId'
+import { Route as ScansIndexRouteImport } from './routes/scans.index'
 import { Route as ScansScanIdRouteImport } from './routes/scans.$scanId'
 import { Route as ApiAgentSplatRouteImport } from './routes/api/agent/$'
 import { Route as ApiAuthLogoutRouteImport } from './routes/api/auth/logout'
@@ -64,6 +65,11 @@ const SkillsRoute = SkillsRouteImport.update({
 const ProductsProductIdRoute = ProductsProductIdRouteImport.update({
   id: '/products/$productId',
   path: '/products/$productId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ScansIndexRoute = ScansIndexRouteImport.update({
+  id: '/scans/',
+  path: '/scans/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ScansScanIdRoute = ScansScanIdRouteImport.update({
@@ -146,6 +152,7 @@ export interface FileRoutesByFullPath {
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
+  '/scans/': typeof ScansIndexRoute
   '/api/agent/$': typeof ApiAgentSplatRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
   '/api/chatgpt/$': typeof ApiChatgptSplatRoute
@@ -169,6 +176,7 @@ export interface FileRoutesByTo {
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
+  '/scans': typeof ScansIndexRoute
   '/api/agent/$': typeof ApiAgentSplatRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
   '/api/chatgpt/$': typeof ApiChatgptSplatRoute
@@ -193,6 +201,7 @@ export interface FileRoutesById {
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
+  '/scans/': typeof ScansIndexRoute
   '/api/agent/$': typeof ApiAgentSplatRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
   '/api/chatgpt/$': typeof ApiChatgptSplatRoute
@@ -218,6 +227,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
+    | '/scans/'
     | '/api/agent/$'
     | '/api/auth/logout'
     | '/api/chatgpt/$'
@@ -241,6 +251,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
+    | '/scans'
     | '/api/agent/$'
     | '/api/auth/logout'
     | '/api/chatgpt/$'
@@ -264,6 +275,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
+    | '/scans/'
     | '/api/agent/$'
     | '/api/auth/logout'
     | '/api/chatgpt/$'
@@ -288,6 +300,7 @@ export interface RootRouteChildren {
   SkillsRoute: typeof SkillsRoute
   ProductsProductIdRoute: typeof ProductsProductIdRoute
   ScansScanIdRoute: typeof ScansScanIdRoute
+  ScansIndexRoute: typeof ScansIndexRoute
   ApiAgentSplatRoute: typeof ApiAgentSplatRoute
   ApiAuthLogoutRoute: typeof ApiAuthLogoutRoute
   ApiChatgptSplatRoute: typeof ApiChatgptSplatRoute
@@ -349,6 +362,13 @@ declare module '@tanstack/react-router' {
       path: '/products/$productId'
       fullPath: '/products/$productId'
       preLoaderRoute: typeof ProductsProductIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/scans/': {
+      id: '/scans/'
+      path: '/scans'
+      fullPath: '/scans/'
+      preLoaderRoute: typeof ScansIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/scans/$scanId': {
@@ -477,6 +497,7 @@ const rootRouteChildren: RootRouteChildren = {
   SkillsRoute: SkillsRoute,
   ProductsProductIdRoute: ProductsProductIdRoute,
   ScansScanIdRoute: ScansScanIdRoute,
+  ScansIndexRoute: ScansIndexRoute,
   ApiAgentSplatRoute: ApiAgentSplatRoute,
   ApiAuthLogoutRoute: ApiAuthLogoutRoute,
   ApiChatgptSplatRoute: ApiChatgptSplatRoute,

@@ -193,7 +193,16 @@ export function Brief({ data }: { data: DashboardData }) {
         ))}
       </div>
 
-      <SectionHead hint="One review per product: each runs a brief per repository. Newest first, including reviews still in progress.">Earlier reviews</SectionHead>
+      <SectionHead
+        hint="One review per product: each runs a brief per repository. Newest first, including reviews still in progress."
+        aside={
+          <Link to="/scans" className="link">
+            All scans
+          </Link>
+        }
+      >
+        Earlier reviews
+      </SectionHead>
       <ProductScans items={data.productScans} empty="No reviews yet." />
     </Page>
   )

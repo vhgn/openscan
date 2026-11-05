@@ -27,6 +27,7 @@ export function Wordmark({ className = '' }: { className?: string }) {
 
 const NAV = [
   { to: '/home', label: 'Brief' },
+  { to: '/scans', label: 'Scans' },
   { to: '/skills', label: 'Methods' },
   { to: '/settings', label: 'Settings' },
 ] as const

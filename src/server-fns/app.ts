@@ -3,13 +3,13 @@ import { createServerFn } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
 import { redirect } from '@tanstack/react-router'
 import { z } from 'zod'
-import { all, batch, first, now, run } from '#/lib/db'
+import { all, batch, exec, first, now, run } from '#/lib/db'
 import { currentUser, requireUser } from '#/lib/session'
 import { installUrl, manageInstallationUrl, githubConfigured } from '#/lib/github/app'
 import { linkPublicRepo, listInstallTargets, listUserRepos, syncUserRepos } from '#/lib/github/repos'
 import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
 import { cancelScan, createScan, loadPreferences, productIdForRepo, startProductScan } from '#/lib/scanner/engine'
-import { listFindings, listProductScans, listQuestions, scanDetail, scanProgress } from '#/lib/queries'
+import { listFindings, listProductScans, listQuestions, listScans, scanDetail, scanProgress } from '#/lib/queries'
 import { codexClientFor, codexEnvironmentFor, openscanHost, settleInternetProbes, startInternetProbe } from '#/lib/codex/runtime'
 import { environmentsSettingsUrl } from '#/lib/codex/cloud'
 import {
@@ -217,7 +217,7 @@ export const answerQuestion = createServerFn({ method: 'POST' })
   .validator(z.object({ id: z.string(), answer: z.string().min(1).max(4000) }))
   .handler(async ({ data }) => {
     const user = await requireUser()
-    await answerQuestionFor(user.id, data.id, data.answer)
+    if (!(await answerQuestionFor(user.id, data.id, data.answer))) throw new Error('Question not found')
     return { ok: true }
   })
 
@@ -225,7 +225,8 @@ export const dismissQuestion = createServerFn({ method: 'POST' })
   .validator(z.object({ id: z.string() }))
   .handler(async ({ data }) => {
     const user = await requireUser()
-    await run(`UPDATE questions SET status = 'dismissed', answered_at = ? WHERE id = ? AND user_id = ?`, now(), data.id, user.id)
+    const changed = await exec(`UPDATE questions SET status = 'dismissed', answered_at = ? WHERE id = ? AND user_id = ?`, now(), data.id, user.id)
+    if (!changed) throw new Error('Question not found')
     return { ok: true }
   })
 
@@ -260,6 +261,14 @@ export const getHome = createServerFn({ method: 'GET' })
   })
 export type DashboardData = Awaited<ReturnType<typeof dashboardData>>
 
+const SCANS_PAGE_LIMIT = 300
+
+/** Every scan of the user (security briefs and repository reads), newest first, for /scans. */
+export const getScans = createServerFn({ method: 'GET' }).handler(async () => {
+  const user = await authed()
+  return { user: publicUser(user), scans: await listScans(user.id, SCANS_PAGE_LIMIT), limit: SCANS_PAGE_LIMIT }
+})
+
 export const getScan = createServerFn({ method: 'GET' })
   .validator(z.object({ id: z.string() }))
   .handler(async ({ data }) => {
@@ -269,7 +278,6 @@ export const getScan = createServerFn({ method: 'GET' })
     return { ...detail, user: publicUser(user) }
   })
 
-/** Reviews one repository: any public one typed as "owner/name" or a GitHub URL (linked on the way), or a linked one. */
 export const cancelScanFn = createServerFn({ method: 'POST' })
   .validator(z.object({ id: z.string() }))
   .handler(async ({ data }) => {
@@ -285,6 +293,7 @@ export const getScanProgress = createServerFn({ method: 'GET' })
     return scanProgress(user.id, data.id, data.since)
   })
 
+/** Reviews one repository: any public one typed as "owner/name" or a GitHub URL (linked on the way), or a linked one. */
 export const scanRepo = createServerFn({ method: 'POST' })
   .validator(z.object({ repo: z.string().trim().min(1).max(300) }))
   .handler(async ({ data }) => {
