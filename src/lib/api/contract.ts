@@ -128,6 +128,7 @@ const Finding = z
     confidence: z.string().nullable(),
     status: z.enum(['open', 'dismissed', 'fixed']),
     verdict: z.string().nullable().describe('Validator verdict, e.g. confirmed'),
+    carried_from: z.string().nullable().describe('Set when product memory skipped the unchanged file: the scan that reviewed it and found this'),
     areas: z.array(z.string()).describe('Product areas (auth, payments, …)'),
     created_at: millis,
   })

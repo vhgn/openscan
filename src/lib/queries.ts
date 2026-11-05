@@ -138,6 +138,8 @@ export interface FindingView {
   threat_model: string | null
   source: string | null
   skills_json: string | null
+  /** Scan that reviewed the code, when this finding was carried over from it unchanged (product memory). */
+  carried_from: string | null
   /** Derived product areas (Auth, Payments, …) for filtering; not stored. */
   areas: AreaId[]
 }

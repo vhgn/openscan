@@ -231,7 +231,14 @@ export async function unchangedReviewed(productId: string, repoId: number, hashe
     const path = r.key.slice(r.key.indexOf(':') + 1)
     return r.content_hash && hashes[path] === r.content_hash
   })
-  return { paths: new Set(hit.map((r) => r.key.slice(r.key.indexOf(':') + 1))), ids: hit.map((r) => r.id), outcomes: Object.fromEntries(hit.map((r) => [r.key.slice(r.key.indexOf(':') + 1), r.content])) }
+  const path = (r: MemoryRow) => r.key.slice(r.key.indexOf(':') + 1)
+  return {
+    paths: new Set(hit.map(path)),
+    ids: hit.map((r) => r.id),
+    outcomes: Object.fromEntries(hit.map((r) => [path(r), r.content])),
+    /** The scan that reviewed each path at this hash (its findings are carried into later scans). */
+    reviewedBy: Object.fromEntries(hit.map((r) => [path(r), r.source_scan_id])) as Record<string, string | null>,
+  }
 }
 
 

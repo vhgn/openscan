@@ -69,7 +69,7 @@ test('deterministic triage: severity × confidence ranking and the summary shape
     engineNote: ENGINE_NOTE,
     validation: { confirmed: 0, needs_validation: 0, rejected: 0, unverified: 4 },
     needsValidation: [],
-    memory: { skippedFiles: 0, reusedVerdicts: 0 },
+    memory: { skippedFiles: 0, reusedVerdicts: 0, carriedFindings: 0 },
   })
   // High/medium-confidence secret outranks the low-confidence SQL heuristic of the same severity.
   const order = t.db.rows<{ title: string; confidence: string }>('SELECT title, confidence FROM findings WHERE scan_id = ? ORDER BY priority', id)
@@ -154,16 +154,83 @@ test(
   },
 )
 
-test(
-  'a rescan of unchanged code keeps its open findings in the latest report',
-  { todo: 'BUG: product memory skips files reviewed at the same blob hash, but their findings are not carried into the new scan, so the latest report (listFindings) drops them (src/lib/scanner/engine.ts initTree/unchangedReviewed)' },
-  async () => {
-    const first = await scan(SHOP_FILES)
-    assert.equal(first.summary.stats.high, 2)
-    const again = await createScan(first.user, first.repo, 'security', 'manual')
-    await drain(t, runStep)
-    assert.equal(JSON.parse(scanRow(t, again).summary_json!).memory.skippedFiles, 4)
-    const titles = (await listFindings(first.user)).map((x) => x.title)
-    assert.ok(titles.includes('Hard-coded credential-like value'), `latest report lost the committed API key: ${JSON.stringify(titles)}`)
-  },
-)
+async function rescan(user: string, repo: number) {
+  const id = await createScan(user, repo, 'security', 'manual')
+  await drain(t, runStep)
+  assert.equal(scanRow(t, id).status, 'completed')
+  return { id, summary: JSON.parse(scanRow(t, id).summary_json!) }
+}
+
+const findingsOf = (scanId: string) =>
+  t.db.rows<{ title: string; status: string; fingerprint: string; carried_from: string | null }>('SELECT title, status, fingerprint, carried_from FROM findings WHERE scan_id = ? ORDER BY title', scanId)
+
+test('a rescan of unchanged code keeps its open findings in the latest report', async () => {
+  const first = await scan(SHOP_FILES)
+  assert.equal(first.summary.stats.high, 2)
+  const again = await rescan(first.user, first.repo)
+  assert.equal(again.summary.memory.skippedFiles, 4)
+  assert.equal(again.summary.memory.carriedFindings, 3)
+  assert.equal(again.summary.filesReviewed, 0, 'nothing was re-reviewed')
+  // The carried findings count toward the report exactly as in the first scan.
+  assert.deepEqual(again.summary.stats, first.summary.stats)
+  assert.equal(again.summary.riskLevel, first.summary.riskLevel)
+  assert.equal(again.summary.headline, first.summary.headline)
+  const titles = (await listFindings(first.user)).map((x) => x.title)
+  assert.ok(titles.includes('Hard-coded credential-like value'), `latest report lost the committed API key: ${JSON.stringify(titles)}`)
+  assert.deepEqual(titles, ['Hard-coded credential-like value', 'SQL built with string concatenation/interpolation', 'Dynamic code evaluation'])
+  const carried = findingsOf(again.id)
+  assert.deepEqual(
+    carried.map((x) => [x.fingerprint, x.carried_from]),
+    findingsOf(first.id).map((x) => [x.fingerprint, first.id]),
+    'same fingerprints, traced back to the scan that reviewed the code',
+  )
+  // A third scan carries them again, still pointing at the reviewing scan.
+  const third = await rescan(first.user, first.repo)
+  assert.deepEqual(findingsOf(third.id).map((x) => x.carried_from), [first.id, first.id, first.id])
+  assert.equal(third.summary.stats.high, 2)
+})
+
+test('a rescan does not bring back findings the user dismissed or fixed', async () => {
+  const first = await scan(SHOP_FILES)
+  // Dismissed on the first report.
+  t.db.write(`UPDATE findings SET status = 'dismissed' WHERE scan_id = ? AND title = 'Dynamic code evaluation'`, first.id)
+  const second = await rescan(first.user, first.repo)
+  assert.deepEqual(findingsOf(second.id).map((x) => x.title), ['Hard-coded credential-like value', 'SQL built with string concatenation/interpolation'])
+  assert.deepEqual(second.summary.stats, { critical: 0, high: 2, medium: 0, low: 0, info: 0 })
+  // Fixed on the second (latest) report, which holds the carried copy.
+  t.db.write(`UPDATE findings SET status = 'fixed' WHERE scan_id = ? AND title = 'Hard-coded credential-like value'`, second.id)
+  const third = await rescan(first.user, first.repo)
+  assert.deepEqual(findingsOf(third.id).map((x) => x.title), ['SQL built with string concatenation/interpolation'])
+  assert.deepEqual(third.summary.stats, { critical: 0, high: 1, medium: 0, low: 0, info: 0 })
+  assert.equal(third.summary.riskLevel, 'high')
+  assert.deepEqual((await listFindings(first.user)).map((x) => x.title), ['SQL built with string concatenation/interpolation'])
+  // The user's decisions on earlier reports are left as they were.
+  assert.deepEqual(
+    [...findingsOf(first.id), ...findingsOf(second.id)].map((x) => [x.title, x.status]),
+    [
+      ['Dynamic code evaluation', 'dismissed'],
+      ['Hard-coded credential-like value', 'open'],
+      ['SQL built with string concatenation/interpolation', 'open'],
+      ['Hard-coded credential-like value', 'fixed'],
+      ['SQL built with string concatenation/interpolation', 'open'],
+    ],
+  )
+  // Reopening on the latest report brings it back in the next scan.
+  t.db.write(`UPDATE findings SET status = 'open' WHERE scan_id = ? AND title = 'Hard-coded credential-like value'`, second.id)
+  const fourth = await rescan(first.user, first.repo)
+  assert.equal(fourth.summary.stats.high, 2)
+})
+
+test('a changed file is reviewed again and its old findings are not carried', async () => {
+  const first = await scan(SHOP_FILES)
+  serveRepo(f, { fullName: 'acme/shop', files: { ...SHOP_FILES, 'src/auth.ts': 'export const API_KEY = process.env.API_KEY\nexport function login() {}' } })
+  const second = await rescan(first.user, first.repo)
+  assert.equal(second.summary.memory.skippedFiles, 3)
+  assert.deepEqual(
+    findingsOf(second.id).map((x) => [x.title, x.carried_from]),
+    [
+      ['Dynamic code evaluation', first.id],
+      ['SQL built with string concatenation/interpolation', first.id],
+    ],
+  )
+})

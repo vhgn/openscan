@@ -778,6 +778,13 @@
               "null"
             ]
           },
+          "carried_from": {
+            "description": "Set when product memory skipped the unchanged file: the scan that reviewed it and found this",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "areas": {
             "type": "array",
             "items": {
@@ -808,6 +815,7 @@
           "confidence",
           "status",
           "verdict",
+          "carried_from",
           "areas",
           "created_at"
         ],
