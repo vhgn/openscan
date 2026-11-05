@@ -66,6 +66,12 @@ export interface FindingView {
   priority: number | null
   status: string
   created_at: number
+  verdict: string | null
+  verification: string | null
+  trace_json: string | null
+  threat_model: string | null
+  source: string | null
+  skills_json: string | null
 }
 
 export function listFindings(userId: string, opts: { scanId?: string; limit?: number } = {}) {
@@ -109,7 +115,7 @@ export function listQuestions(userId: string, statuses: string[] = ['open'], rep
 }
 
 export async function scanDetail(userId: string, scanId: string) {
-  const scan = await first<ScanRow & { repo: string; html_url: string | null; profile_json: string | null }>(
+  const scan = await first<ScanRow & { repo: string; html_url: string | null; profile_json: string | null; skills_json: string | null }>(
     `SELECT s.*, r.full_name AS repo, r.html_url, r.profile_json FROM scans s JOIN repositories r ON r.id = s.repo_id WHERE s.id = ? AND s.user_id = ?`,
     scanId,
     userId,
@@ -124,9 +130,10 @@ export async function scanDetail(userId: string, scanId: string) {
     `SELECT q.*, NULL AS repo FROM questions q WHERE q.scan_id = ? ORDER BY q.created_at`,
     scanId,
   )
-  const { state_json: _s, profile_json, ...rest } = scan
+  const { state_json: _s, profile_json, skills_json, ...rest } = scan
   return {
     scan: { ...rest, summary: parseJson<(Partial<ScanSummary> & { profile?: RepoProfile; openQuestions?: number }) | null>(scan.summary_json, null) },
+    skills: parseJson<string[]>(skills_json, []),
     profile: parseJson<RepoProfile | null>(profile_json, null),
     events: events.reverse(),
     findings,

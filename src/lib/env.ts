@@ -18,6 +18,8 @@ export function isDemoLoginEnabled(): boolean {
   return str('DEV_DEMO_LOGIN') === '1'
 }
 
-export function aiMode(): 'auto' | 'heuristic' {
-  return str('AI_MODE') === 'heuristic' ? 'heuristic' : 'auto'
+/** auto = user's ChatGPT plan; heuristic = no LLM; mock = scripted fake LLM for local pipeline testing only. */
+export function aiMode(): 'auto' | 'heuristic' | 'mock' {
+  const v = str('AI_MODE')
+  return v === 'heuristic' ? 'heuristic' : v === 'mock' ? 'mock' : 'auto'
 }

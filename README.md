@@ -13,6 +13,8 @@ Built with **TanStack Start** on **Cloudflare Workers**, **D1** (SQLite), and **
 | **[README.md](./README.md)** (this file) | How to run locally, deploy, architecture, technical decisions, how coding agents were used | You want to run or change the code |
 | **[TASK.md](./TASK.md)** | The original assignment brief (transcribed from `Agentic_poc.pdf`) plus a table mapping each requirement to where it lives | You want to know what was asked |
 | **[PRODUCT.md](./PRODUCT.md)** | Product spec: audience, required flows, landing page options, preferences, questions model, out of scope | You want to know what we're building and why |
+| **[SKILLS.md](./SKILLS.md)** | The agentic security skills the scanner uses (Trail of Bits, Cloudflare, Anthropic, NVIDIA, Cognition, OpenAI): which stage each runs in, how it's applied, licenses, and how to update them | You want to know *how* a scan reasons, or to change the methodology |
+| [`skills/vendor/`](./skills/vendor) | Verbatim copies of those skills, with upstream licenses and pinned commits (`SOURCES.md`) | Auditing or updating the methodology |
 | [`docs/design/`](./docs/design) | Screenshots of the 3 landing page options on `/design` | Picking a landing page |
 | [`docs/screens/`](./docs/screens) | Screenshots of the onboarding → dashboard → report flow | Quick visual tour |
 | [`.dev.vars.example`](./.dev.vars.example) | Every secret and env var, with comments | Setting up your environment |
@@ -78,6 +80,7 @@ Then open:
    | Webhook URL | `APP_URL/api/github/webhook` |
    | Webhook secret | a random string, also set as `GITHUB_WEBHOOK_SECRET` |
    | Repository permissions | **Contents: Read-only**, **Metadata: Read-only** |
+   | Optional permission | **Code scanning alerts: Read-only** (imports CodeQL/Semgrep alerts; see SKILLS.md) |
    | Subscribe to events | **Push** (installation events are always delivered) |
    | Where can it be installed | Any account |
 
@@ -101,7 +104,8 @@ Then open:
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Vite + workerd on :3000 (pages, API, queue consumer, D1) |
-| `npm test` | Unit tests (Node's built-in test runner): file ranking, dependency parsing, heuristics, PEM conversion, JSON extraction |
+| `npm test` | Unit tests (Node's built-in test runner): file ranking, dependency parsing, heuristics, runtime advisories, skill registry/vendoring, PEM conversion, JSON extraction |
+| `AI_MODE=mock` in `.dev.vars` | Scripted fake LLM that exercises the whole AI path (review → validate verdicts → questions → triage) without a ChatGPT account. Local testing only. |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run build` | Production build into `dist/` |
 | `npm run db:migrate:local` | Apply `migrations/*.sql` to the local D1 |
@@ -169,15 +173,15 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 | Kind | Steps | Purpose |
 | --- | --- | --- |
 | `understand` | `init → read* → profile` | Onboarding "AI reads your repo": builds a repo profile (stack, entry points, data stores, auth, sensitive areas) and raises or self-answers questions |
-| `security` | `init → deps → review* → triage` | The report: OSV dependency check, batched code review, then a triage agent that dedupes, ranks, flags false positives, writes *what matters* / *next actions*, and adds PoCs when `depth = deep_poc` |
+| `security` | `init → deps → review* → validate* → triage` | The report. `deps` runs the deterministic signals: OSV, install scripts, Node/PHP/GitLab/Brotli runtime advisories, GitHub code-scanning import. `review` does batched AI code review (diff-first on push). `validate` sends each serious finding to an **independent validator** that confirms it, marks it needs-validation (which raises a question for you), or rejects it. `triage` ranks findings, writes *what matters* / *next actions*, and adds PoCs when `depth = deep_poc` |
 
-**Agents** (`src/lib/ai/agents.ts`) are role prompts with zod output schemas: *reader*, *architect*, *reviewer*, *triage lead*. Calls go through the AI SDK (`streamText` + `Output.object`), with a tolerant JSON fallback. Static-analyzer hits are passed to the reviewer as hints to confirm or reject.
+**Agents** (`src/lib/ai/agents.ts`) are role prompts with zod output schemas: *reader*, *architect*, *reviewer*, *validator*, *triage lead*. Their methodology comes from published agentic security skills, distilled into playbooks (`src/lib/skills/playbooks.ts`). [SKILLS.md](./SKILLS.md) maps every skill to its stage. Calls go through the AI SDK (`streamText` + `Output.object`), with a tolerant JSON fallback. Static-analyzer hits are passed to the reviewer as hints to confirm or reject.
 
 **Heuristic engine.** If the user skips ChatGPT, their session expires, or `AI_MODE=heuristic`, the same pipeline runs with deterministic rules (secrets, injection sinks, TLS off, CI risks) plus OSV. Scans never fail just because the AI is unavailable.
 
 ### Data model (`migrations/0001_init.sql`)
 
-`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`) · `preferences` · `scans` (status/phase/progress/state/summary) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (approved landing design).
+`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`) · `preferences` · `scans` (status/phase/progress/state/summary/skills) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (approved landing design).
 
 ### REST API (cookie-authenticated)
 
@@ -201,6 +205,7 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 - **Questions are first-class data.** They're deduplicated, capped per repo, answered by the AI with evidence or by the user, and fed into every later scan as known answers.
 - **Bounded context.** Files are ranked for security relevance (`select-files.ts`, unit-tested), truncated per file, and batched by a character budget. Depth preference controls how many files are reviewed.
 - **Real dependency data.** OSV.dev `querybatch` (free, no key) over lockfiles and manifests (npm, PyPI, Go, crates.io, RubyGems).
+- **Methodology from vetted skills, not ad-hoc prompts.** Trail of Bits, Cloudflare, Anthropic, NVIDIA, Cognition and OpenAI skills are vendored with their licenses. Their methods run as agent playbooks; parts that can be made deterministic run as tested code (runtime advisories, agentic-actions rules). A separate validator agent tries to refute every serious finding before it reaches the report.
 - **Graceful degradation everywhere:** heuristic engine without AI, jsDelivr/raw CDN fallback for public demo repos, structured-output → plain-JSON fallback for models.
 
 ### Known limitations

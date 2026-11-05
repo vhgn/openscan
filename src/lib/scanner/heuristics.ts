@@ -69,13 +69,63 @@ const RULES: Rule[] = [
     id: 'gha-prt',
     test: /pull_request_target/,
     files: /^\.github\/workflows\//,
-    finding: { severity: 'high', category: 'ci', title: 'Workflow uses pull_request_target', description: 'pull_request_target runs with repository secrets in the context of untrusted PRs.', impact: 'If it checks out PR code, a fork can steal secrets or push to the repo.', recommendation: 'Use pull_request, or never check out/execute PR head code in this workflow.', confidence: 'medium' },
+    finding: { severity: 'high', category: 'ci', title: 'Workflow uses pull_request_target', description: 'pull_request_target runs with repository secrets in the context of untrusted PRs.', impact: 'If it checks out PR code, a fork can steal secrets or push to the repo.', recommendation: 'Use pull_request, or never check out/execute PR head code in this workflow.', confidence: 'medium', skills: ['tob-agentic-actions-auditor'] },
   },
   {
     id: 'gha-unpinned',
     test: /uses:\s*[\w\-]+\/[\w\-]+@(main|master|v\d+)\s*$/m,
     files: /^\.github\/workflows\//,
     finding: { severity: 'low', category: 'ci', title: 'Third-party GitHub Action not pinned to a commit SHA', description: 'Actions referenced by tag/branch can change underneath you.', impact: 'A compromised action version runs with your workflow token and secrets.', recommendation: 'Pin actions to full commit SHAs (Dependabot can keep them updated).', confidence: 'high' },
+  },
+  // --- Trail of Bits agentic-actions-auditor (deterministic subset of vectors B, D, G, H, I)
+  {
+    id: 'ai-action-expression-injection',
+    test: /^\s*(prompt|direct_prompt|custom_instructions|system[_-]?prompt|override_prompt)\s*:.*\$\{\{\s*github\.event\.(issue|comment|pull_request|review|discussion)[^}]*\.(body|title)/im,
+    files: /^\.github\/workflows\//,
+    finding: { severity: 'high', category: 'ci', title: 'Attacker-controlled GitHub event text is interpolated into an AI agent prompt', description: 'A ${{ github.event.*.body/title }} expression is placed directly in an AI action prompt field (agentic-actions vector B).', impact: 'Anyone who can open an issue/PR/comment can steer the agent and use its token, tools and secrets.', recommendation: 'Pass untrusted text as data the agent fetches with least privilege, restrict triggers to trusted actors, and keep the agent read-only.', confidence: 'high', skills: ['tob-agentic-actions-auditor'] },
+  },
+  {
+    id: 'prt-head-checkout',
+    test: /ref:\s*\$\{\{\s*github\.event\.pull_request\.head\.(sha|ref)\s*\}\}/,
+    files: /^\.github\/workflows\//,
+    finding: { severity: 'high', category: 'ci', title: 'Workflow checks out pull-request head code in a privileged context', description: 'The PR head ref/sha is checked out; combined with pull_request_target this runs fork code with repository secrets (vector D).', impact: 'A fork PR can execute code with write tokens and secrets.', recommendation: 'Do not check out PR head in pull_request_target workflows; split into an unprivileged pull_request job.', confidence: 'medium', skills: ['tob-agentic-actions-auditor'] },
+  },
+  {
+    id: 'eval-ai-output',
+    test: /(eval|bash -c|sh -c)\s+["']?\$\{\{\s*steps\.[\w-]+\.outputs\./,
+    files: /^\.github\/workflows\//,
+    finding: { severity: 'high', category: 'ci', title: 'Workflow executes a previous step\'s (AI) output as shell', description: 'A run step evaluates ${{ steps.*.outputs.* }} (vector G).', impact: 'Prompt-injected model output becomes command execution in CI.', recommendation: 'Treat step outputs as data: pass via env vars and never eval them.', confidence: 'medium', skills: ['tob-agentic-actions-auditor'] },
+  },
+  {
+    id: 'ai-dangerous-sandbox',
+    test: /danger-full-access|--dangerously-skip-permissions|--yolo\b|safety-strategy:\s*unsafe|allowed_tools:.*Bash\(\*\)|"Bash\(\*\)"/,
+    files: /^\.github\/workflows\/|(^|\/)\.claude\/settings[^/]*\.json$/,
+    finding: { severity: 'medium', category: 'ci', title: 'AI agent runs with an unrestricted sandbox / tool allowlist', description: 'Agent configuration disables sandboxing or allows any shell command (vector H).', impact: 'Any prompt injection reaching the agent turns into arbitrary command execution.', recommendation: 'Use the action\'s default sandbox and an explicit, minimal tool allowlist.', confidence: 'high', skills: ['tob-agentic-actions-auditor'] },
+  },
+  {
+    id: 'ai-wildcard-users',
+    test: /(allowed_non_write_users|allow-users|allowed_bots)\s*:\s*['"]\*['"]/,
+    files: /^\.github\/workflows\//,
+    finding: { severity: 'medium', category: 'ci', title: 'AI action accepts triggers from any GitHub user', description: 'A wildcard user allowlist lets non-collaborators invoke the agent (vector I).', impact: 'External users can drive the agent with repository permissions.', recommendation: 'Restrict to named maintainers or require write access.', confidence: 'high', skills: ['tob-agentic-actions-auditor'] },
+  },
+  // --- NVIDIA SkillSpector-style checks on agent skill / config files
+  {
+    id: 'agent-instruction-override',
+    test: /ignore (all )?(previous|prior|above) instructions|disregard (the )?(system|previous) prompt|do not (tell|inform) the user/i,
+    files: /(^|\/)(SKILL\.md|AGENTS\.md|CLAUDE\.md|GEMINI\.md|\.cursorrules)$|(^|\/)\.cursor\/rules\/|(^|\/)\.claude\//i,
+    finding: { severity: 'high', category: 'ci', title: 'Agent instruction file contains a prompt-injection / concealment directive', description: 'An agent skill or rules file tells the model to override prior instructions or hide actions from the user.', impact: 'Agents loading this file can be steered into unsafe actions without the user noticing.', recommendation: 'Remove the directive and review who can modify agent configuration (CODEOWNERS).', confidence: 'medium', skills: ['nvidia-skillspector'] },
+  },
+  {
+    id: 'agent-pipe-to-shell',
+    test: /(curl|wget)\s+[^|\n]*\|\s*(ba|z)?sh\b/,
+    files: /(^|\/)(SKILL\.md|AGENTS\.md|CLAUDE\.md|\.mcp\.json|mcp\.json)$|(^|\/)\.claude\//i,
+    finding: { severity: 'medium', category: 'ci', title: 'Agent configuration instructs a pipe-to-shell install', description: 'An agent skill/config downloads and executes a remote script.', impact: 'Whoever controls that URL controls code run by the agent on developer machines or CI.', recommendation: 'Pin and verify artifacts (checksum/signature) or vendor the script.', confidence: 'medium', skills: ['nvidia-skillspector'] },
+  },
+  {
+    id: 'agent-exfil-endpoint',
+    test: /(webhook\.site|requestbin|pipedream\.net|ngrok\.(io|app)|pastebin\.com\/api|discord(app)?\.com\/api\/webhooks)/i,
+    files: /(^|\/)(SKILL\.md|AGENTS\.md|CLAUDE\.md|\.mcp\.json|mcp\.json)$|(^|\/)\.claude\/|(^|\/)\.cursor\//i,
+    finding: { severity: 'high', category: 'ci', title: 'Agent configuration references a data-exfiltration style endpoint', description: 'A request-capture / webhook endpoint appears in agent instructions or MCP config.', impact: 'Agent context (code, secrets, tokens) may be sent to a third party.', recommendation: 'Remove the endpoint and audit recent agent runs.', confidence: 'medium', skills: ['nvidia-skillspector'] },
   },
   {
     id: 'docker-root',

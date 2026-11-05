@@ -31,9 +31,14 @@ function Dashboard() {
       <TopBar
         user={data.user}
         right={
-          <Link to="/onboarding" search={{ step: 'repos' }} className="muted hover:underline">
-            Settings
-          </Link>
+          <>
+            <Link to="/skills" className="muted hover:underline">
+              Skills
+            </Link>
+            <Link to="/onboarding" search={{ step: 'repos' }} className="muted hover:underline">
+              Settings
+            </Link>
+          </>
         }
       />
       <main className="mx-auto max-w-5xl space-y-12 px-4 py-10">

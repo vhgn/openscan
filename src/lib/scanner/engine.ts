@@ -6,19 +6,30 @@
  * each Worker invocation short, survives restarts, and gives the UI granular
  * progress for free.
  *
- *   understand:  init -> read* -> profile -> done        (onboarding "AI reads your repo")
- *   security:    init -> deps -> review* -> triage -> done (the security report)
+ *   understand:  init -> read* -> profile -> done                      (onboarding "AI reads your repo")
+ *   security:    init -> deps -> review* -> validate* -> triage -> done  (the security report)
+ *
+ * Methodology comes from vendored agentic security skills (src/lib/skills, SKILLS.md):
+ * recon = ToB audit-context-building + Cloudflare recon; review = Cloudflare hunting +
+ * Anthropic security-review (+ ToB differential-review on push, agentic-actions /
+ * SkillSpector for CI & agent config); validate = ToB fp-check + brocards + Cloudflare
+ * fresh verifier; deps = OSV + ToB supply-chain / brotli-checker + OpenAI php2shell +
+ * Cognition fix data + GitHub code-scanning (ToB static-analysis); report = Cloudflare
+ * reporting + ToB patching-bugs.
  */
 import { env, aiMode } from '../env'
 import { all, batch, first, now, parseJson, run, uid } from '../db'
 import { sha256Hex } from '../crypto'
 import { backgroundLLM, type BackgroundLLM } from '../chatgpt'
-import { fetchFile, fetchTree, getRepo, repoToken } from '../github/repos'
-import { askJson } from '../ai/llm'
+import { fetchChangedFiles, fetchCodeScanningAlerts, fetchFile, fetchTree, getRepo, repoToken } from '../github/repos'
+import { askJson, MOCK_LLM } from '../ai/llm'
 import * as A from '../ai/agents'
 import { selectFiles, selectLockfiles, treeOverview } from './select-files'
 import { dedupeDeps, osvFindings, parseDeps } from './deps'
 import { heuristicFindings, heuristicProfile, heuristicQuestions } from './heuristics'
+import { brotliFindings, installScriptPackages, runtimeFindings, selectRuntimeFiles } from './runtime-advisories'
+import { huntPlaybook, reconPlaybook, reportPlaybook, validatePlaybook } from '../skills/playbooks'
+import { tracePaths } from './trace'
 import {
   SEVERITIES,
   defaultPreferences,
@@ -51,11 +62,21 @@ interface ScanState {
   readme?: string
   manifests?: Record<string, string>
   truncatedTree?: boolean
+  /** Push range for differential scans (set by the webhook). */
+  diff?: { base: string; head: string }
+  /** Files changed in that range. */
+  changed?: string[]
+  runtimeFiles?: string[]
+  /** Finding ids awaiting independent validation. */
+  validateQueue?: string[]
+  validateTotal?: number
+  /** Skill ids applied so far in this scan. */
+  skills?: string[]
 }
 
 // ---------------------------------------------------------------- public API
 
-export async function createScan(userId: string, repoId: number, kind: ScanKind, trigger: string): Promise<string> {
+export async function createScan(userId: string, repoId: number, kind: ScanKind, trigger: string, initialState: Partial<ScanState> = {}): Promise<string> {
   const active = await first<{ id: string }>(
     `SELECT id FROM scans WHERE user_id = ? AND repo_id = ? AND kind = ? AND status IN ('queued','running')`,
     userId,
@@ -65,13 +86,14 @@ export async function createScan(userId: string, repoId: number, kind: ScanKind,
   if (active) return active.id
   const id = uid()
   await run(
-    `INSERT INTO scans (id, user_id, repo_id, kind, trigger, status, phase, progress, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, ?)`,
+    `INSERT INTO scans (id, user_id, repo_id, kind, trigger, status, phase, progress, state_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, ?, ?)`,
     id,
     userId,
     repoId,
     kind,
     trigger,
+    JSON.stringify(initialState),
     now(),
     now(),
   )
@@ -121,10 +143,11 @@ export async function runStep(scanId: string): Promise<void> {
     ctx.llm = await resolveEngine(ctx)
     const result = scan.kind === 'understand' ? await understandStep(ctx) : await securityStep(ctx)
     await run(
-      `UPDATE scans SET phase = ?, progress = ?, state_json = ?, attempts = 0, updated_at = ? WHERE id = ?`,
+      `UPDATE scans SET phase = ?, progress = ?, state_json = ?, skills_json = ?, attempts = 0, updated_at = ? WHERE id = ?`,
       result.phase,
       result.progress,
       JSON.stringify(ctx.state),
+      JSON.stringify(ctx.state.skills ?? []),
       now(),
       scan.id,
     )
@@ -158,7 +181,8 @@ interface StepResult {
 
 async function resolveEngine(ctx: StepCtx): Promise<BackgroundLLM | null> {
   const { scan, user } = ctx
-  const llm = aiMode() === 'auto' ? await backgroundLLM(user).catch(() => null) : null
+  const mode = aiMode()
+  const llm = mode === 'mock' ? MOCK_LLM : mode === 'auto' ? await backgroundLLM(user).catch(() => null) : null
   if (!scan.engine) {
     const engine = llm ? 'ai' : 'heuristic'
     await run('UPDATE scans SET engine = ?, model = ? WHERE id = ?', engine, llm?.model ?? null, scan.id)
@@ -244,14 +268,30 @@ function trimBatch(files: Array<{ path: string; content: string }>) {
   return out
 }
 
+/** Records that a skill contributed to this scan (shown on the report). */
+function useSkills(ctx: StepCtx, ids: string[]) {
+  ctx.state.skills = [...new Set([...(ctx.state.skills ?? []), ...ids])]
+}
+
 async function initTree(ctx: StepCtx, maxFiles: number, boost: string[] = []) {
   const token = await repoToken(ctx.repo)
   const tree = await fetchTree(ctx.repo, token)
   ctx.state.sha = tree.sha
   ctx.state.truncatedTree = tree.truncated
   ctx.state.overview = treeOverview(tree.entries)
-  ctx.state.files = selectFiles(tree.entries, { maxFiles, maxBytesPerFile: MAX_FILE_CHARS, boost, focus: ctx.prefs.focus })
+  if (ctx.state.diff && ctx.scan.kind === 'security') {
+    // Trail of Bits differential-review: changed files are reviewed first.
+    const changed = await fetchChangedFiles(ctx.repo, token, ctx.state.diff.base, ctx.state.diff.head).catch(() => [])
+    const present = new Set(tree.entries.map((e) => e.path))
+    ctx.state.changed = changed.filter((p) => present.has(p))
+    if (ctx.state.changed.length) {
+      useSkills(ctx, ['tob-differential-review'])
+      await logEvent(ctx.scan.id, `Differential review: ${ctx.state.changed.length} file(s) changed in ${ctx.state.diff.base.slice(0, 7)}..${ctx.state.diff.head.slice(0, 7)} are reviewed first`)
+    }
+  }
+  ctx.state.files = selectFiles(tree.entries, { maxFiles, maxBytesPerFile: MAX_FILE_CHARS, boost, focus: ctx.prefs.focus, priority: ctx.state.changed })
   ctx.state.lockfiles = selectLockfiles(tree.entries)
+  ctx.state.runtimeFiles = selectRuntimeFiles(tree.entries)
   ctx.state.cursor = 0
   ctx.state.notes = []
   ctx.state.filesReviewed = 0
@@ -333,9 +373,13 @@ async function saveFindings(ctx: StepCtx, drafts: FindingDraft[]) {
     if (existing.has(fp)) continue
     existing.add(fp)
     ops.push([
-      `INSERT INTO findings (id, scan_id, repo_id, user_id, severity, category, title, file, line, description, impact, recommendation, poc, confidence, fingerprint, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [uid(), ctx.scan.id, ctx.repo.id, ctx.user.id, f.severity, f.category, f.title, f.file ?? null, f.line ?? null, f.description, f.impact ?? null, f.recommendation ?? null, f.poc ?? null, f.confidence ?? 'medium', fp, now()],
+      `INSERT INTO findings (id, scan_id, repo_id, user_id, severity, category, title, file, line, description, impact, recommendation, poc, confidence, fingerprint, created_at, trace_json, threat_model, source, skills_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        uid(), ctx.scan.id, ctx.repo.id, ctx.user.id, f.severity, f.category, f.title, f.file ?? null, f.line ?? null, f.description,
+        f.impact ?? null, f.recommendation ?? null, f.poc ?? null, f.confidence ?? 'medium', fp, now(),
+        f.trace?.length ? JSON.stringify(f.trace) : null, f.threatModel ?? null, f.source ?? null, f.skills?.length ? JSON.stringify(f.skills) : null,
+      ],
     ])
   }
   await batch(ops)
@@ -359,8 +403,10 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
       state.cursor = (state.cursor ?? 0) + consumed(batchPaths, files)
       state.filesReviewed = (state.filesReviewed ?? 0) + files.length
       if (ctx.llm) {
+        const recon = reconPlaybook()
+        useSkills(ctx, recon.skills)
         const out = await askJson(ctx.llm, {
-          system: A.READER_SYSTEM,
+          system: `${A.READER_SYSTEM}\n\n${recon.text}`,
           prompt: A.readerPrompt({
             repo: ctx.repo.full_name,
             overview: state.overview ?? '',
@@ -370,6 +416,7 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
             userContext: ctx.prefs.context,
           }),
           schema: A.readerOutput,
+          name: 'reader',
           effort: 'low',
         })
         state.notes = [...(state.notes ?? []), ...out.notes].slice(-60)
@@ -391,7 +438,7 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
       let profile: RepoProfile
       if (ctx.llm) {
         const out = await askJson(ctx.llm, {
-          system: A.PROFILE_SYSTEM,
+          system: `${A.PROFILE_SYSTEM}\n\n${reconPlaybook().text}`,
           prompt: A.profilePrompt({
             repo: ctx.repo.full_name,
             overview: state.overview ?? '',
@@ -400,6 +447,7 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
             userContext: ctx.prefs.context,
           }),
           schema: A.profileOutput,
+          name: 'profile',
           effort: 'medium',
         })
         const { answers, ...rest } = out
@@ -433,31 +481,24 @@ async function securityStep(ctx: StepCtx): Promise<StepResult> {
     case 'init': {
       const maxFiles = prefs.depth === 'triage' ? 20 : prefs.depth === 'deep_poc' ? 50 : 35
       await initTree(ctx, maxFiles, profile?.sensitiveAreas ?? [])
-      return { phase: prefs.focus.includes('dependencies') ? 'deps' : 'review', progress: 8 }
+      return { phase: 'deps', progress: 8 }
     }
     case 'deps': {
-      const files = await readFiles(ctx, state.lockfiles ?? [])
-      // Prefer lockfiles over package.json when both exist in the same dir.
-      const deps = dedupeDeps(files.flatMap((f) => parseDeps(f.path, f.content)))
-      state.depsChecked = deps.length
-      const found = await osvFindings(deps).catch(async (e) => {
-        await logEvent(scan.id, `OSV lookup failed: ${String(e).slice(0, 200)}`, 'warn')
-        return []
-      })
-      await saveFindings(ctx, found)
-      await logEvent(scan.id, `Checked ${deps.length} dependencies against OSV.dev: ${found.length} vulnerable package(s)`)
+      await signalsStep(ctx)
       return { phase: 'review', progress: 18 }
     }
     case 'review': {
       const batchPaths = nextBatch(state)
-      if (!batchPaths.length) return { phase: 'triage', progress: 88 }
+      if (!batchPaths.length) return ctx.llm ? startValidation(ctx) : { phase: 'triage', progress: 88 }
       const files = trimBatch(await readFiles(ctx, batchPaths))
       state.cursor = (state.cursor ?? 0) + consumed(batchPaths, files)
       state.filesReviewed = (state.filesReviewed ?? 0) + files.length
       const hints = files.flatMap((f) => heuristicFindings(f.path, f.content))
       if (ctx.llm) {
+        const playbook = huntPlaybook({ paths: files.map((f) => f.path), differential: Boolean(state.changed?.length) })
+        useSkills(ctx, playbook.skills)
         const out = await askJson(ctx.llm, {
-          system: A.reviewSystem(prefs),
+          system: A.reviewSystem(prefs, playbook.text),
           prompt: A.reviewPrompt({
             repo: ctx.repo.full_name,
             profile,
@@ -468,20 +509,26 @@ async function securityStep(ctx: StepCtx): Promise<StepResult> {
               content: `${hints.filter((h) => h.file === f.path).map((h) => `// static-analyzer hint (verify, may be false positive): ${h.title} @ line ${h.line}`).join('\n')}\n${f.content}`,
             })),
             userContext: prefs.context,
+            changed: state.changed,
           }),
           schema: A.reviewOutput,
+          name: 'review',
           effort: prefs.depth === 'triage' ? 'low' : 'medium',
         })
-        await saveFindings(ctx, out.findings)
+        await saveFindings(ctx, out.findings.map((f) => ({ ...f, source: 'ai-review' as const, skills: playbook.skills })))
         await applyAnswers(ctx, out.answers)
         await addQuestions(ctx, out.questions.slice(0, 2))
         await logEvent(scan.id, `Reviewed ${files.map((f) => f.path).join(', ')} → ${out.findings.length} finding(s)`)
       } else {
-        await saveFindings(ctx, hints)
+        for (const h of hints) if (h.skills?.length) useSkills(ctx, h.skills)
+        await saveFindings(ctx, hints.map((h) => ({ ...h, source: 'heuristic' as const })))
         await logEvent(scan.id, `Pattern-scanned ${files.map((f) => f.path).join(', ')} → ${hints.length} finding(s)`)
       }
       const total = state.files?.length || 1
-      return { phase: 'review', progress: Math.min(85, 18 + Math.round((67 * (state.cursor ?? 0)) / total)) }
+      return { phase: 'review', progress: Math.min(75, 18 + Math.round((57 * (state.cursor ?? 0)) / total)) }
+    }
+    case 'validate': {
+      return validateStep(ctx, profile)
     }
     case 'triage': {
       await triage(ctx, profile)
@@ -492,18 +539,193 @@ async function securityStep(ctx: StepCtx): Promise<StepResult> {
   }
 }
 
+/**
+ * Deterministic signals: OSV advisories, Brotli copies and install scripts (ToB
+ * supply-chain-risk-auditor / brotli-checker), runtime version advisories (OpenAI
+ * php2shell-checker, Cognition fix data) and GitHub code-scanning alerts (ToB static-analysis).
+ */
+async function signalsStep(ctx: StepCtx) {
+  const { scan, state, prefs } = ctx
+  if (prefs.focus.includes('dependencies')) {
+    const files = await readFiles(ctx, state.lockfiles ?? [])
+    const deps = dedupeDeps(files.flatMap((f) => parseDeps(f.path, f.content)))
+    state.depsChecked = deps.length
+    const found = await osvFindings(deps).catch(async (e) => {
+      await logEvent(scan.id, `OSV lookup failed: ${String(e).slice(0, 200)}`, 'warn')
+      return []
+    })
+    const brotli = brotliFindings(deps)
+    const lock = files.find((f) => f.path.endsWith('package-lock.json'))
+    const scripts = lock ? installScriptPackages(lock.content) : []
+    const supply: FindingDraft[] = scripts.length
+      ? [
+          {
+            severity: 'info',
+            category: 'dependency',
+            title: `${scripts.length} production dependenc${scripts.length === 1 ? 'y runs' : 'ies run'} install-time scripts`,
+            file: lock!.path,
+            line: null,
+            description: `Packages with install scripts: ${scripts.slice(0, 15).join(', ')}${scripts.length > 15 ? ` and ${scripts.length - 15} more` : ''}.`,
+            impact: 'Install scripts execute with the developer/CI user\'s permissions on every install; a compromised version of any of them runs code before the app does.',
+            recommendation: 'Check whether `npm ci --ignore-scripts` works for this build; otherwise pin and review these packages.',
+            confidence: 'high',
+          },
+        ]
+      : []
+    const unparsed = (state.lockfiles ?? []).filter((p) => /(yarn\.lock|pnpm-lock\.yaml)$/.test(p))
+    await saveFindings(ctx, [
+      ...found.map((f) => ({ ...f, source: 'osv' as const, skills: ['tob-supply-chain-risk-auditor'] })),
+      ...brotli.map((f) => ({ ...f, source: 'runtime-advisory' as const, skills: ['tob-brotli-checker'] })),
+      ...supply.map((f) => ({ ...f, source: 'supply-chain' as const, skills: ['tob-supply-chain-risk-auditor'] })),
+    ])
+    useSkills(ctx, ['tob-supply-chain-risk-auditor'])
+    if (brotli.length) useSkills(ctx, ['tob-brotli-checker'])
+    await logEvent(
+      scan.id,
+      `Checked ${deps.length} dependencies against OSV.dev: ${found.length} vulnerable package(s)${scripts.length ? `, ${scripts.length} with install scripts` : ''}${unparsed.length ? `; unassessable lockfiles (not parsed): ${unparsed.join(', ')}` : ''}`,
+    )
+  }
+
+  // Runtime advisories (Node / PHP / GitLab) from Dockerfiles, version files and CI.
+  const runtimeFiles = await readFiles(ctx, state.runtimeFiles ?? [])
+  const runtime = runtimeFindings(runtimeFiles)
+  if (runtime.length) {
+    await saveFindings(ctx, runtime.map((f) => ({ ...f, source: 'runtime-advisory' as const, skills: runtimeSkills(f.title) })))
+    useSkills(ctx, [...new Set(runtime.flatMap((f) => runtimeSkills(f.title)))])
+  }
+  await logEvent(scan.id, `Runtime advisories: checked ${runtimeFiles.length} Dockerfile/version/CI file(s) → ${runtime.length} finding(s)`)
+
+  // GitHub code scanning (CodeQL / Semgrep SARIF) when the repo has it.
+  const alerts = await fetchCodeScanningAlerts(ctx.repo, await repoToken(ctx.repo)).catch(() => null)
+  if (alerts?.length) {
+    const sev = (a: (typeof alerts)[number]): Severity => {
+      const s = (a.rule.security_severity_level ?? a.rule.severity ?? '').toLowerCase()
+      return s === 'critical' ? 'critical' : s === 'high' || s === 'error' ? 'high' : s === 'medium' || s === 'warning' ? 'medium' : 'low'
+    }
+    await saveFindings(
+      ctx,
+      alerts.slice(0, 40).map((a) => ({
+        severity: sev(a),
+        category: 'code' as const,
+        title: `${a.tool.name}: ${a.rule.description ?? a.rule.name ?? a.rule.id}`,
+        file: a.most_recent_instance.location?.path ?? null,
+        line: a.most_recent_instance.location?.start_line ?? null,
+        description: `${a.most_recent_instance.message?.text ?? ''}\nAlert: ${a.html_url}`,
+        impact: null,
+        recommendation: null,
+        confidence: 'medium' as const,
+        source: 'code-scanning' as const,
+        skills: ['tob-static-analysis'],
+      })),
+    )
+    useSkills(ctx, ['tob-static-analysis'])
+  }
+  await logEvent(scan.id, alerts ? `Imported ${alerts.length} open GitHub code-scanning alert(s)` : 'GitHub code scanning not available for this repository (skipped)')
+}
+
+function runtimeSkills(title: string): string[] {
+  if (/PHP/.test(title)) return ['openai-php2shell-checker', 'cognition-devin-vuln-fixes']
+  if (/Node/.test(title)) return ['tob-brotli-checker', 'cognition-devin-vuln-fixes']
+  return ['cognition-devin-vuln-fixes']
+}
+
+// ----- independent validation (ToB fp-check + brocards, Cloudflare fresh verifier)
+
+const VALIDATE_PER_STEP = 2
+
+async function startValidation(ctx: StepCtx): Promise<StepResult> {
+  const cap = ctx.prefs.depth === 'triage' ? 4 : ctx.prefs.depth === 'deep_poc' ? 12 : 8
+  const rows = await all<{ id: string }>(
+    `SELECT id FROM findings WHERE scan_id = ? AND status = 'open' AND verdict IS NULL
+       AND severity IN ('critical','high','medium') AND COALESCE(source, 'ai-review') IN ('ai-review','heuristic','code-scanning')
+     ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, created_at LIMIT ?`,
+    ctx.scan.id,
+    cap,
+  )
+  ctx.state.validateQueue = rows.map((r) => r.id)
+  ctx.state.validateTotal = rows.length
+  if (!rows.length) return { phase: 'triage', progress: 88 }
+  const pb = validatePlaybook()
+  useSkills(ctx, pb.skills)
+  await logEvent(ctx.scan.id, `Validating ${rows.length} finding(s) with an independent verifier (fp-check gates, triage brocards)`)
+  return { phase: 'validate', progress: 76 }
+}
+
+async function validateStep(ctx: StepCtx, profile: RepoProfile | null): Promise<StepResult> {
+  const queue = ctx.state.validateQueue ?? []
+  if (!queue.length || !ctx.llm) return { phase: 'triage', progress: 88 }
+  const pb = validatePlaybook()
+  for (const id of queue.slice(0, VALIDATE_PER_STEP)) {
+    const f = await first<{ id: string; severity: string; category: string; title: string; file: string | null; line: number | null; description: string; threat_model: string | null; trace_json: string | null; impact: string | null; recommendation: string | null }>(
+      'SELECT id, severity, category, title, file, line, description, threat_model, trace_json, impact, recommendation FROM findings WHERE id = ?',
+      id,
+    )
+    if (!f) continue
+    const trace = parseJson<string[]>(f.trace_json, [])
+    const paths = [...new Set([f.file, ...tracePaths(trace)].filter(Boolean) as string[])].slice(0, 3)
+    const files = await readFiles(ctx, paths)
+    try {
+      const out = await askJson(ctx.llm, {
+        system: A.validateSystem(pb.text),
+        prompt: A.validatePrompt({
+          repo: ctx.repo.full_name,
+          profile,
+          knownAnswers: await knownAnswers(ctx.user.id, ctx.repo.id),
+          finding: { severity: f.severity, category: f.category, title: f.title, file: f.file, line: f.line, description: f.description, threatModel: f.threat_model, trace, impact: f.impact, recommendation: f.recommendation },
+          files,
+          userContext: ctx.prefs.context,
+        }),
+        schema: A.validateOutput,
+          name: 'validate',
+        effort: ctx.prefs.depth === 'triage' ? 'medium' : 'high',
+      })
+      const gates = Object.entries(out.gates).map(([k, v]) => `${k}: ${v}`).join(', ')
+      const missing = out.decision === 'needs_validation' && out.missingFact.trim() ? `\nMissing fact: ${out.missingFact.trim()}` : ''
+      const verification = `${out.restatedClaim}\nGates — ${gates}${out.brocardFailed ? `; fails brocard ${out.brocardFailed}` : ''}.\n${out.reasoning}${missing}`
+      const skills = JSON.stringify(pb.skills)
+      if (out.decision === 'rejected') {
+        await run(`UPDATE findings SET verdict = 'rejected', verification = ?, status = 'dismissed', skills_json = ? WHERE id = ?`, verification, skills, id)
+      } else if (out.decision === 'needs_validation') {
+        await run(`UPDATE findings SET verdict = 'needs_validation', verification = ?, skills_json = ? WHERE id = ?`, verification, skills, id)
+        if (out.missingFact.trim()) {
+          await addQuestions(ctx, [{ question: out.missingFact.trim(), rationale: `Decides whether "${f.title}" is a real vulnerability.` }])
+        }
+      } else {
+        await run(
+          `UPDATE findings SET verdict = 'confirmed', verification = ?, severity = ?, recommendation = COALESCE(NULLIF(?, ''), recommendation), skills_json = ? WHERE id = ?`,
+          verification,
+          out.severity,
+          out.correctedRecommendation,
+          skills,
+          id,
+        )
+      }
+      await logEvent(ctx.scan.id, `Validator: "${f.title}" → ${out.decision}${out.decision === 'confirmed' ? ` (${out.severity})` : ''}`)
+    } catch (e) {
+      await logEvent(ctx.scan.id, `Validator could not assess "${f.title}": ${String(e).slice(0, 150)}`, 'warn')
+    }
+  }
+  ctx.state.validateQueue = queue.slice(VALIDATE_PER_STEP)
+  const total = ctx.state.validateTotal || 1
+  const done = total - ctx.state.validateQueue.length
+  return ctx.state.validateQueue.length ? { phase: 'validate', progress: 76 + Math.round((12 * done) / total) } : { phase: 'triage', progress: 88 }
+}
+
 const SEV_RANK: Record<Severity, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 }
 
 async function triage(ctx: StepCtx, profile: RepoProfile | null) {
   const { scan, state, prefs } = ctx
-  const rows = await all<{ id: string; severity: Severity; category: string; title: string; file: string | null; description: string; confidence: string; recommendation: string | null }>(
-    'SELECT id, severity, category, title, file, description, confidence, recommendation FROM findings WHERE scan_id = ? ORDER BY created_at',
+  const rows = await all<{ id: string; severity: Severity; category: string; title: string; file: string | null; description: string; confidence: string; recommendation: string | null; verdict: string | null }>(
+    `SELECT id, severity, category, title, file, description, confidence, recommendation, verdict FROM findings
+     WHERE scan_id = ? AND status = 'open' ORDER BY created_at`,
     scan.id,
   )
   let summary: ScanSummary
   if (ctx.llm && rows.length) {
+    const pb = reportPlaybook()
+    useSkills(ctx, pb.skills)
     const out = await askJson(ctx.llm, {
-      system: A.triageSystem(prefs),
+      system: A.triageSystem(prefs, pb.text),
       prompt: A.triagePrompt({
         repo: ctx.repo.full_name,
         profile,
@@ -511,15 +733,18 @@ async function triage(ctx: StepCtx, profile: RepoProfile | null) {
         findings: rows.slice(0, 80).map((r, index) => ({ index, ...r })),
       }),
       schema: A.triageOutput,
+          name: 'triage',
       effort: prefs.depth === 'deep_poc' ? 'high' : 'medium',
     })
     const ops: Array<[string, Array<string | number | null>]> = []
     for (const r of out.ranking) {
       const row = rows[r.index]
       if (!row) continue
+      // A finding the independent validator confirmed is never dismissed by triage alone.
+      const dismiss = r.falsePositive && row.verdict !== 'confirmed'
       ops.push([
         `UPDATE findings SET priority = ?, severity = ?, status = ? WHERE id = ?`,
-        [r.priority, r.severity, r.falsePositive ? 'dismissed' : 'open', row.id],
+        [r.priority, row.verdict === 'confirmed' ? row.severity : r.severity, dismiss ? 'dismissed' : 'open', row.id],
       ])
     }
     for (const p of out.research) {
@@ -544,7 +769,7 @@ async function triage(ctx: StepCtx, profile: RepoProfile | null) {
       stats: emptyStats(),
       filesReviewed: 0,
       dependenciesChecked: 0,
-      engineNote: 'Heuristic mode: link ChatGPT for AI-verified findings, false-positive filtering and research.',
+      engineNote: 'Heuristic mode: link ChatGPT for AI-verified findings, independent validation (fp-check) and research.',
     }
   }
   const counts = await all<{ severity: Severity; n: number }>(
@@ -552,9 +777,20 @@ async function triage(ctx: StepCtx, profile: RepoProfile | null) {
     scan.id,
   )
   for (const c of counts) summary.stats[c.severity] = c.n
+  const verdicts = await all<{ verdict: string | null; n: number }>('SELECT verdict, COUNT(*) AS n FROM findings WHERE scan_id = ? GROUP BY verdict', scan.id)
+  summary.validation = { confirmed: 0, needs_validation: 0, rejected: 0, unverified: 0 }
+  for (const v of verdicts) {
+    const key = (v.verdict ?? 'unverified') as keyof NonNullable<ScanSummary['validation']>
+    if (key in summary.validation) summary.validation[key] += v.n
+  }
+  const nv = await all<{ title: string; verification: string | null }>(
+    `SELECT title, verification FROM findings WHERE scan_id = ? AND verdict = 'needs_validation' AND status = 'open' LIMIT 10`,
+    scan.id,
+  )
+  summary.needsValidation = nv.map((r) => ({ title: r.title, missingFact: /^Missing fact: (.+)$/m.exec(r.verification ?? '')?.[1] ?? '' }))
   summary.filesReviewed = state.filesReviewed ?? 0
   summary.dependenciesChecked = state.depsChecked ?? 0
-  await run('UPDATE scans SET summary_json = ? WHERE id = ?', JSON.stringify(summary), scan.id)
+  await run('UPDATE scans SET summary_json = ?, skills_json = ? WHERE id = ?', JSON.stringify(summary), JSON.stringify(state.skills ?? []), scan.id)
 }
 
 function emptyStats(): Record<Severity, number> {

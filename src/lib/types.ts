@@ -99,6 +99,10 @@ export interface ScanSummary {
   filesReviewed: number
   dependenciesChecked: number
   engineNote?: string
+  /** Findings whose verdict hinges on a fact outside the source (Cloudflare needs_validation). */
+  needsValidation?: Array<{ title: string; missingFact: string }>
+  /** Validation outcome counts. */
+  validation?: { confirmed: number; needs_validation: number; rejected: number; unverified: number }
 }
 
 export interface FindingDraft {
@@ -112,4 +116,10 @@ export interface FindingDraft {
   recommendation?: string | null
   confidence?: 'high' | 'medium' | 'low'
   poc?: string | null
+  /** Source → sink trace ("file:line — step"), per the Cloudflare candidate gate. */
+  trace?: string[] | null
+  /** "An attacker with <capability> can <action> to achieve <impact>" (brocard 1). */
+  threatModel?: string | null
+  source?: 'ai-review' | 'heuristic' | 'osv' | 'runtime-advisory' | 'code-scanning' | 'supply-chain'
+  skills?: string[]
 }

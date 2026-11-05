@@ -1,0 +1,346 @@
+# Reachability guide
+
+Use this guide for surfaces present in the target. These are investigation
+routes, not assertions that a listed project or deployment is vulnerable.
+
+For each copy, collect a concrete chain:
+
+`artifact/revision -> selected decoder -> caller -> input entry point -> input owner`
+
+Build selection needs a manifest, link/build evidence, or corresponding artifact
+provenance. Shipment needs the deployed image/package/binary identity. Reachability
+needs the call path and active configuration, including attacker influence and
+authentication before decoding. A benign controlled request can establish a
+decoding path when authorized; do not send malformed or exploit payloads.
+
+## Trailmark source discovery
+
+Use the packaged helper to find relevant callsites and callers before tracing
+the actual input path:
+
+```sh
+uv run --script scripts/brotli_source_discovery.py /absolute/source > discovery.json
+```
+
+Run from the installed skill directory with trusted uv. This pins Trailmark
+0.7.0; first use can download its dependencies and parser grammars. It reads
+source without executing the target. Select a focused source subtree because
+initial parsing and indexing are not bounded by the output limits.
+
+For patch review in a Brotli source tree, add `--language c` and repeated
+`--symbol` options for `DecodeLiteralBlockSwitchInternal`,
+`DecodeCommandBlockSwitchInternal`, `DecodeDistanceBlockSwitchInternal`, and
+`ProcessCommands`. This traces source callers independently of the compiled
+architecture; verify build selection and unresolved edges separately.
+
+Review `candidates[].call` for Brotli decoder calls (including zlib's Brotli
+APIs), or fetch/Undici. The `neighborhood` joins callers by full node IDs and
+records source spans, unresolved proxy targets, confidence, deferred edges, and relevant
+entrypoint tags. Use those locations to prioritize source review, then check:
+
+1. Resolve the actual binding. A fetch name can refer to a browser API, local
+   function, or parameter. Review import aliases and wrappers; `--symbol NAME`
+   adds an exact search target without asserting what it calls.
+2. Follow callers to the input owner. Deferred callback edges do not prove the
+   callback runs. Entry tags are heuristic or repository configured, not proof
+   of attacker control or active routing.
+3. Verify build selection, shipped artifact, runtime, and configuration using
+   the same evidence required for a manual trace.
+
+Keep `configured_by` on edges: `.trailmark/links.toml` can add calls with no
+extracted callsite. `.trailmark/entrypoints.toml` can supply entrypoint tags.
+Treat both as target-supplied declarations and independently verify them.
+
+Trailmark's directory parser skips `vendor`, `node_modules`, `build`, `dist`,
+hidden directories, common environment/cache directories, and directory
+symlinks; it can follow file symlinks. The broader inventory covers different
+inputs and must still run. Top-level JavaScript/TypeScript calls, ESM aliases,
+dynamic calls, unsupported frameworks, and missing dependencies can be absent
+without a parser diagnostic. No paths, no tags, or no diagnostics never prove
+complete coverage or unreachability.
+
+The helper bounds candidates, caller nodes/edges, traversal depth, and reported
+diagnostics. Exit 3 marks parsing errors, empty source, and truncation as
+incomplete. Exit 0 means collection completed within those limits. Neither exit
+is a patch verdict or a runtime reachability conclusion. When tooling or source
+is unavailable, state that gap and continue with direct source inspection.
+
+## Dynamically linked ELF providers
+
+An undefined Brotli decoder symbol identifies an importer, not the decoder bytes
+which will run. Keep the importer's patch status and provider selection unknown
+until the supplying regular files are inspected in the relevant deployment scope.
+Use a trusted host `readelf` for static metadata only:
+
+```sh
+readelf -dW -- /absolute/application-or-library
+readelf -Ws -- /absolute/application-or-library
+```
+
+Record the importer SHA-256 and ELF identity, each decoder API with `UND`, every
+`DT_NEEDED` name, and literal `DT_RPATH`/`DT_RUNPATH` values. Then:
+
+1. Establish the application, container/rootfs, package, or deployment directory
+   being reviewed. A library with the same name on the review host is not evidence
+   about the deployment.
+2. Enumerate regular provider candidates under that supplied scope: an explicitly
+   packaged sibling, an application library directory, or a library path recorded
+   by reviewed deployment/build configuration. Include transitive providers when
+   one wrapper imports another Brotli library.
+3. Treat `$ORIGIN`, `${ORIGIN}`, and other loader tokens as untrusted path data.
+   For candidate enumeration, substitute an importer directory only with ordinary
+   path operations inside the supplied root; normalize the result and reject scope
+   escapes. Never pass the token through `eval`, `sh -c`, environment expansion,
+   or command substitution. Do not follow an unreviewed symlink as provider proof.
+4. Scan each actual provider file directly with the inventory helper. Preserve its
+   hash, code/metadata result, path, and whether it is an import or definition.
+   If the scanner reports a symlink gap, supply the real deployment target as an
+   explicit scan root rather than enabling symlink following.
+5. Keep runtime selection unknown unless deployment-specific loader configuration,
+   build/link provenance, package/image contents, or an explicitly authorized
+   runtime trace establishes the selected file. `DT_NEEDED` is a name; RUNPATH,
+   RPATH, SONAME, and a matching fixed file do not by themselves prove selection.
+
+Never use `ldd`, `LD_TRACE_LOADED_OBJECTS`, or the target's dynamic loader for this
+static workflow: they execute loader behavior and can run target-controlled code.
+Do not execute a helper from the inspected root. Static `readelf` results also
+cannot account for `dlopen`, audit/preload variables, loader caches, mounts,
+set-user-ID rules, or process-specific namespaces. Ask for the missing deployment
+evidence instead of simulating those rules with the review host.
+
+A vulnerable matched provider establishes affected code in that provider, not
+that the importer reaches it. A fixed match supplies bounded code-identity
+evidence for that provider; it does not clear the binary or application. Other
+provider candidates, embedded copies, relocation targets, loader selection, the
+call path, and input ownership remain separate rows of evidence.
+
+## Node.js and HTTP services/clients
+
+Search for `fetch`, `globalThis.fetch`, `undici`, `brotliDecompress`,
+`createBrotliDecompress`, `node:zlib`,
+`Content-Encoding`, `body-parser`, and request decoding middleware. Follow the
+actual middleware order: authentication in a handler can run after automatic
+decompression. Check body parsers and proxies at every receiving boundary.
+Ordinary response encoding or an `Accept-Encoding: br` advertisement does not
+prove vulnerable request decoding.
+
+Inspect outbound fetch/HTTP response decompression too. Identify whether an
+attacker can control an origin, redirect target, fetched document, or intermediary
+input. Do not assume all clients decode automatically. Tie the executing Node
+binary and its bundled decoder to the deployment; a shell's default `node`
+can differ from a service, container, Electron embedder, or packaged executable.
+
+### Node's built-in fetch
+
+Node's [built-in `fetch()` uses Undici](https://nodejs.org/api/globals.html#fetch).
+The [bundled implementation in Node v24.22.0](https://github.com/nodejs/node/blob/v24.22.0/deps/undici/src/lib/web/fetch/index.js#L2028-L2088)
+pipes Brotli-encoded response bodies through `zlib.createBrotliDecompress()`.
+An attacker-controlled response can therefore reach the affected decoder on an
+unpatched runtime even when the app never imports Brotli or `node:zlib` itself.
+
+Trace URL inputs, redirects, wrappers, and the actual fetch implementation.
+Establish the deployed Node build and vendor patch state. A `fetch()` reference
+alone does not prove an attacker-controlled URL or an unpatched runtime.
+Changing `Accept-Encoding` alone does not disable response decompression: the
+reviewed implementation selects its decoder from response `Content-Encoding`.
+Its default HTTPS request advertises Brotli; its HTTP request does not, but a
+server can still return a Brotli-encoded body.
+
+The offline helper records JavaScript/TypeScript fetch references, global fetch
+property references, Undici imports, and Undici dependency declarations. Its
+JSON evidence includes source lines and columns, with at most 20 source matches
+per file and an explicit truncation flag. Each lead keeps patch status and
+reachability unknown until reviewed. Browser/custom bindings and literal template
+text can produce extra leads. Computed names, dynamic loading, bundler rewrites,
+and unavailable source can hide calls; the heuristic is not a JavaScript parser.
+
+The inventory does not resolve bindings, trace URL ownership, or discover the running
+Node version. Its `--node-version` option assesses only a separately obtained
+version, and does not associate that version with an unresolved source lead.
+Identify the real binary/build and follow the call path through wrappers and
+redirects. An Undici import alone does not establish use of its fetch API or
+automatic response decoding.
+
+The [benign loopback probe](../scripts/verify_node_fetch.cjs) checks built-in
+fetch's invocation of Node's Brotli decoder for valid HTTP response bodies,
+including with an identity request header and after a redirect. It does not test
+malformed streams, deployment reachability, or exploitation. See
+[runtime fixtures](https://github.com/trailofbits/brotli-checker/blob/main/CONTRIBUTING.md#runtime-fixtures)
+for maintainer instructions.
+
+## Electron applications
+
+Resolve the API and process before applying Node's version rules. Renderer
+fetch, Electron `net.fetch`, and `session.fetch` use Chromium networking;
+Node's main-process fetch uses Undici. Electron's
+[networking documentation](https://www.electronjs.org/docs/latest/api/net#netfetchinput-init)
+distinguishes these routes. Chromium also decodes Brotli inside WOFF2 fonts.
+
+Electron can replace Node's bundled decoder with Chromium's copy. For example,
+[Electron 43.1.1's build patch](https://github.com/electron/electron/blob/v43.1.1/patches/node/build_add_gn_build_files.patch#L323-L338)
+links Node to Chromium's Brotli targets. Trace the target release's DEPS, patches,
+selected Chromium decoder, and shipped artifact. An affected standalone Node
+version or a Brotli version string alone does not classify an Electron build.
+Vendor builds with the same Electron version can contain different native code.
+
+Do not transfer Node's header behavior to every Electron API, or treat a
+response-decoding error as proof that no decoder was entered. The
+[runtime fixtures](https://github.com/trailofbits/brotli-checker/blob/main/CONTRIBUTING.md#runtime-fixtures)
+can compare valid-response handling in a separately obtained Electron runtime
+or an explicitly authorized installed Slack test instance.
+
+For a real app, establish whether a message, preview, external URL, attachment,
+font, or redirect actually delivers attacker-controlled bytes to the selected
+decoder. Account for proxying, re-encoding, allowlists, authentication, and
+process boundaries. A trusted debugger opening a local fixture confirms only
+that tested runtime route; it does not prove an attacker-controlled product path.
+Mach-O matching and ASAR parsing are outside the offline helper's supported
+classifiers.
+
+Keep app inspection read-only unless runtime testing is explicitly authorized.
+For an authorized runtime test, use a fresh profile and quit the normal app
+first. The maintainer Slack fixture refuses to launch over an existing main
+process. Normal decoding tests must not be described as CVE trigger tests.
+
+## Other language ecosystems
+
+Use the [ecosystem integration guide](ecosystems.md) for concrete Python,
+JVM, .NET, Rust, Go, Ruby, PHP, and JavaScript/WASM provider examples. Start at
+the recorded import/API location, resolve the actual implementation and deployment
+artifact, then follow its callers and input ownership. An import or dependency
+can be optional, replaced, shadowed, or unused; it is not a patch verdict.
+
+## Java HTTP stacks and native JNI providers
+
+Look for `com.aayushatharva.brotli4j`, `DecoderJNI`, `BrotliDecoder`, native
+classifier JARs, shaded/nested JARs, and extracted `.so`/`.dll`/`.dylib` files.
+Resolve the platform-specific native provider selected at runtime; the wrapper
+version is not the embedded C library version. A JVM application can call this
+C decoder through JNI, while a pure Java implementation requires separate review.
+
+The reviewed Netty source provides a concrete route:
+[HttpContentDecompressor](https://github.com/netty/netty/blob/4.1/codec-http/src/main/java/io/netty/handler/codec/http/HttpContentDecompressor.java)
+selects a Brotli decoder for `br` when the provider is available, and
+[BrotliDecoder](https://github.com/netty/netty/blob/4.1/codec/src/main/java/io/netty/handler/codec/compression/BrotliDecoder.java)
+uses Brotli4j's JNI decoder. Presence of Netty or Brotli4j alone does not show
+that this handler is installed, this branch/version is shipped, or native bytes
+are vulnerable. Follow server and client pipelines separately.
+
+## WOFF2, fonts, document and image processing
+
+[WOFF2's decoder](https://github.com/google/woff2/blob/master/src/woff2_dec.cc)
+calls `BrotliDecoderDecompress` while expanding font data. Trace font uploads,
+document conversion, preview rendering, browser/font sanitizers, and asynchronous
+jobs to the decoder actually linked by the worker. Encoding fonts is a different
+operation. A pinned submodule in the inventory does not establish that a product
+ships that submodule instead of a patched system library.
+
+Record one-shot versus streaming calls, input segmentation, length checks, and
+the process sandbox. Reaching a public decompression API does not itself prove
+the malformed-input/error-buffer path or a usable corruption primitive. Do not
+assert that a one-shot call is safe or exploitable without implementation evidence.
+
+## workerd and other embedders
+
+[workerd's system streams](https://github.com/cloudflare/workerd/blob/main/src/workerd/api/system-streams.c++)
+include KJ Brotli input streams and content-encoding selection under a compatibility
+flag. Follow the target revision through KJ/Cap'n Proto, Bazel/module downloads,
+selected Brotli inputs, and the deployed workerd binary. Inspect the active
+compatibility flags and the code which supplies each stream. Source support
+does not establish a cloud service's deployed version or tenant isolation.
+
+## TLS certificate compression — investigate per implementation
+
+[RFC 8879](https://www.rfc-editor.org/rfc/rfc8879.html) defines Brotli as one TLS
+certificate compression algorithm. The receiver decompresses the certificate
+message before normal certificate parsing and verification. As an inference,
+certificate validation cannot protect a decoder invoked earlier in that path;
+the actual implementation and negotiation must still be established.
+
+Check both client-side decoding of server certificates and, where implemented
+and negotiated, server-side decoding of client certificates. Identify TLS 1.3
+support, advertised/selected compression algorithms, registration of a Brotli
+decompression callback, its linked library, and attacker control of the peer.
+BoringSSL's
+[certificate compression extension logic](https://github.com/google/boringssl/blob/main/ssl/extensions.cc)
+uses registered compression/decompression callbacks; merely linking BoringSSL
+does not establish that a Brotli decoder is registered. Search for
+`SSL_CTX_add_cert_compression_alg`, `TLSEXT_cert_compression_brotli`,
+`CompressedCertificate`, and `BrotliDecoder` at the call sites and build inputs.
+
+Distinguish certificate compression from HTTP body compression and historical
+TLS record compression. A successful TLS handshake or a trusted-certificate
+policy alone does not establish this path's patch status or eliminate the
+pre-verification input surface. Do not claim universal unauthenticated server
+exposure: protocol role, negotiation, provider, buffering, and configuration matter.
+
+## Bounded binary patch triage
+
+Stable [decoder-data signatures](binary-signatures.md) can identify useful
+starting points even when stripping or LTO defeats compiled-code matching.
+Use their recorded data addresses to find code cross-references in trusted
+static tools; do not pass a lookup table to objdump as executable instructions.
+Select the actual referencing functions for bounded code review. Table presence
+does not itself prove patch state, one coherent decoder instance, or runtime use.
+
+When the inventory leaves a local ELF copy unknown, the skill can collect a
+bounded, read-only disassembly packet:
+
+Before disassembly, inspect `evidence.decoder_metadata`. The inventory reads ELF
+symbols and supported constant-return `BrotliDecoderVersion` definitions directly,
+without invoking target code. Defined decoder APIs establish embedded symbol
+evidence; imports point to another provider. An old supported-branch version is a
+`potentially_vulnerable` update lead. A fixed reported version, symbol definition,
+or import never establishes fixed code and does not clear other copies.
+
+```sh
+python3 scripts/brotli_binary_triage.py /absolute/target > triage.json
+```
+
+Use a trusted local `objdump`; never use a tool or script from the target. The
+helper rejects target symlinks and streams the original artifact SHA-256 while
+using sparse reads for ELF structures. Only bounded selected code fragments are
+copied for raw-binary objdump, with original virtual addresses preserved. It
+records each fragment's hash/source offset, exact command, scope, and limits.
+The original regular file is not copied or memory-mapped. Changes detected on the
+open input invalidate collection. It neither loads nor executes the target and
+removes all fragments afterward. Raw output's `.data` label is not the source ELF
+section; use recorded scopes and symbol addresses for numeric call targets.
+Treat exit 0 as successful
+evidence collection only. Treat exit 3, a timeout/output cap, unsupported ELF,
+missing relevant symbols, or truncated symbol selection as explicitly incomplete.
+
+Prefer the selected internal block-switch and `ProcessCommands*` symbols. The
+public `BrotliDecoderDecompressStream` fallback can orient a stripped or partially
+symbolized build but may be too large or may hide inlined callees. If relevant
+symbols are absent, request an address range from trusted link/map evidence, or
+translate a scanner-reported executable file offset with `--file-offset OFFSET
+--length BYTES`. Use `--start-address` and `--stop-address`, optionally constrained
+by `--section`, only when those addresses have trusted provenance. A string's file
+offset is not code provenance.
+
+Compare the packet with both reviewed sides of the decoder patch. Trace all three
+block-switch classes (literal, command, distance), including safe variants, from
+the invalid `max_block_type` condition to `ProcessCommands*` and its caller. The
+fixed path preserves `BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH` as a
+`BrotliDecoderErrorCode`; the affected path's boolean/void handling can lose that
+specific status. Check return-value tests and propagation in control flow rather
+than looking only for a constant, call target, symbol, or string. Compiler
+optimization can inline, clone, merge, or remove these functions.
+
+Keep patch status `unknown` when the packet omits a relevant caller/callee, the
+control-flow mapping is ambiguous, output was bounded early, or multiple decoder
+copies are not all accounted for. Report an affected conclusion only when the old
+status-loss behavior is affirmatively traced. Do not report a fixed binary merely
+from a version-return function, fixed-version string, import/export, or one
+fixed-looking range. Patch evidence, shipment, runtime selection, and reachability
+remain separate conclusions.
+
+## Reporting unresolved cases
+
+If only source is present, leave build selection and shipment unknown. If an
+artifact is known but native provenance is missing, leave patch status unknown.
+If the caller or active configuration is missing, leave reachability unknown.
+Record the next missing evidence for each row so another reviewer can close the
+specific gap. Avoid calling an entire application fixed based on one source file,
+one package, or one reviewed route.

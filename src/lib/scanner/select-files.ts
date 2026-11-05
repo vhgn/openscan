@@ -17,6 +17,8 @@ const CODE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|php|java|kt|cs|rs|scala|swif
 const CONFIG_RE = /(^|\/)(Dockerfile[^/]*|docker-compose[^/]*\.ya?ml|\.env\.example|wrangler\.(toml|jsonc?)|serverless\.ya?ml|vercel\.json|netlify\.toml|nginx\.conf|[^/]+\.tf|app\.ya?ml|settings\.py|config\.(js|ts|py|ya?ml|json))$/i
 const CI_RE = /^\.github\/workflows\/[^/]+\.ya?ml$|(^|\/)(\.gitlab-ci\.yml|Jenkinsfile|\.circleci\/config\.yml)$/
 const SENSITIVE_RE = /(auth|login|session|token|jwt|oauth|passw|crypt|secret|key|permission|role|admin|acl|middleware|guard|policy|upload|payment|billing|webhook|api|route|controller|handler|server|db|database|query|sql|model|exec|shell|eval|template|render|serializ|deserializ)/i
+/** Agent skill / instruction / MCP config (NVIDIA SkillSpector scope). */
+const AGENT_CONFIG_RE = /(^|\/)(SKILL\.md|AGENTS\.md|CLAUDE\.md|GEMINI\.md|\.mcp\.json|mcp\.json|\.cursorrules)$|(^|\/)\.cursor\/rules\/|(^|\/)\.claude\/(commands|agents|skills|settings[^/]*\.json)/i
 const TEST_RE = /(^|\/)(__tests__|tests?|spec|e2e|cypress|playwright)\/|\.(test|spec)\.[a-z]+$/i
 
 export interface SelectOptions {
@@ -24,6 +26,8 @@ export interface SelectOptions {
   maxBytesPerFile: number
   /** Extra path substrings to boost (e.g. from the AI-built repo profile). */
   boost?: string[]
+  /** Exact paths that must be ranked first (e.g. files changed by the triggering push). */
+  priority?: string[]
   focus?: Array<'code' | 'dependencies' | 'secrets' | 'config' | 'ci'>
 }
 
@@ -36,6 +40,7 @@ export function scorePath(path: string, size: number, opts: SelectOptions): numb
   if (/(^|\/)README(\.md)?$/i.test(path) && depth === 0) score += 60
   if (MANIFEST_RE.test(path)) score += focus.has('dependencies') ? 70 : 40
   if (CI_RE.test(path)) score += focus.has('ci') ? 55 : 15
+  if (AGENT_CONFIG_RE.test(path)) score += focus.has('ci') ? 50 : 20
   if (CONFIG_RE.test(path)) score += focus.has('config') || focus.has('secrets') ? 50 : 20
   if (CODE_EXT.test(path)) {
     score += 20
@@ -45,6 +50,7 @@ export function scorePath(path: string, size: number, opts: SelectOptions): numb
   if (score === 0) return -1
   if (TEST_RE.test(path)) score -= 50
   for (const b of opts.boost ?? []) if (b && path.toLowerCase().includes(b.toLowerCase())) score += 25
+  if (opts.priority?.includes(path)) score += 100
   score -= depth * 3
   if (size > opts.maxBytesPerFile) score -= 10
   return score

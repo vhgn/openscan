@@ -61,6 +61,16 @@ landing (/) ──CTA──▶ GitHub OAuth ──▶ onboarding
 - While it keeps reading, it **answers its own open questions** with evidence (file paths). These show as "AI answered".
 - Anything still open appears on the dashboard. User answers become **known answers** that every later scan uses, so it never asks twice.
 
+## Scanning methodology
+
+Scans follow published agentic security skills from Trail of Bits, Cloudflare, Anthropic, NVIDIA, Cognition and OpenAI. The product-visible effects:
+- Every serious finding is **independently validated**. The report shows it as ✓ verified, *needs validation* (which becomes a question for you) or rejected (kept with its reasoning).
+- Findings show a **threat model** ("an attacker with X can Y to achieve Z") and a **source → sink trace**.
+- **Push scans review the diff first** (differential review).
+- Known-CVE **runtime checks** cover Node, PHP, GitLab and Brotli, and workflows that run AI agents get **CI/agent-config checks**.
+
+Details are in [SKILLS.md](./SKILLS.md).
+
 ## Out of scope for this POC (next steps)
 
 - Report delivery by email, Slack or GitHub issues (reports live on the dashboard for now).

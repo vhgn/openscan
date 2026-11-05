@@ -55,7 +55,10 @@ export const Route = createFileRoute('/api/github/webhook')({
           )
           for (const w of watchers) {
             const prefs = await loadPreferences(w.user_id)
-            if (prefs.frequency === 'on_push') await createScan(w.user_id, payload.repository.id, 'security', 'push')
+            // Differential review (Trail of Bits differential-review): the range drives file priority.
+            if (prefs.frequency === 'on_push') {
+              await createScan(w.user_id, payload.repository.id, 'security', 'push', { diff: { base: payload.before, head: payload.after } })
+            }
           }
         }
         return new Response('ok')

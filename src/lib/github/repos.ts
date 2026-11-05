@@ -165,3 +165,35 @@ export async function fetchFile(repo: RepoRow, token: string | null, path: strin
   }
   return gh<string>(`/repos/${owner}/${name}/contents/${encPath}?ref=${ref}`, token, { raw: true })
 }
+
+/** Files changed in a push range (Trail of Bits differential-review input). */
+export async function fetchChangedFiles(repo: RepoRow, token: string | null, base: string, head: string): Promise<string[]> {
+  const [owner, name] = repo.full_name.split('/')
+  if (/^0+$/.test(base)) return [] // branch creation: no base to diff against
+  const res = await gh<{ files?: Array<{ filename: string; status: string }> }>(`/repos/${owner}/${name}/compare/${base}...${head}`, token)
+  return (res.files ?? []).filter((f) => f.status !== 'removed').map((f) => f.filename)
+}
+
+export interface CodeScanningAlert {
+  number: number
+  rule: { id: string; severity?: string | null; security_severity_level?: string | null; description?: string; name?: string }
+  tool: { name: string }
+  most_recent_instance: { location?: { path?: string; start_line?: number }; message?: { text?: string } }
+  html_url: string
+}
+
+/**
+ * Open GitHub code scanning alerts (CodeQL/Semgrep SARIF uploads) — the way openscan
+ * consumes the Trail of Bits static-analysis skill inside a Worker. Requires the
+ * optional "Code scanning alerts: read" app permission; returns null when unavailable.
+ */
+export async function fetchCodeScanningAlerts(repo: RepoRow, token: string | null): Promise<CodeScanningAlert[] | null> {
+  if (!token) return null
+  const [owner, name] = repo.full_name.split('/')
+  try {
+    return await gh<CodeScanningAlert[]>(`/repos/${owner}/${name}/code-scanning/alerts?state=open&per_page=50`, token)
+  } catch (e) {
+    if (e instanceof GitHubError && [403, 404].includes(e.status)) return null
+    throw e
+  }
+}

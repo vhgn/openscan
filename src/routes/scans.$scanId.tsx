@@ -4,6 +4,37 @@ import { Progress, SeverityBadge, StatusDot, TopBar } from '#/components/ui'
 import { QuestionCard } from '#/components/QuestionCard'
 import { getScan, updateFindingStatus } from '#/server-fns/app'
 import type { RepoProfile, ScanSummary } from '#/lib/types'
+import { SKILL_BY_ID } from '#/lib/skills/registry'
+
+const SOURCE_LABEL: Record<string, string> = {
+  'ai-review': 'AI review',
+  heuristic: 'pattern rule',
+  osv: 'OSV.dev advisory',
+  'runtime-advisory': 'runtime advisory',
+  'code-scanning': 'GitHub code scanning',
+  'supply-chain': 'supply-chain check',
+}
+
+function VerdictBadge({ verdict }: { verdict: string | null }) {
+  if (!verdict) return null
+  const style =
+    verdict === 'confirmed'
+      ? 'bg-emerald-600 text-white'
+      : verdict === 'needs_validation'
+        ? 'border border-amber-500 text-amber-600'
+        : 'bg-stone-400 text-white'
+  const label = verdict === 'confirmed' ? '✓ verified' : verdict === 'needs_validation' ? 'needs validation' : 'rejected'
+  return <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${style}`}>{label}</span>
+}
+
+function parseList(json: string | null): string[] {
+  try {
+    const v = json ? JSON.parse(json) : []
+    return Array.isArray(v) ? v.map(String) : []
+  } catch {
+    return []
+  }
+}
 
 export const Route = createFileRoute('/scans/$scanId')({
   loader: ({ params }) => getScan({ data: { id: params.scanId } }),
@@ -62,6 +93,11 @@ function ScanPage() {
               <SeverityBadge severity={summary.riskLevel} />
               <span className="muted text-xs">
                 {summary.filesReviewed} files reviewed · {summary.dependenciesChecked} dependencies checked
+                {summary.validation && summary.validation.confirmed + summary.validation.rejected + summary.validation.needs_validation > 0 && (
+                  <>
+                    {' '}· validator: {summary.validation.confirmed} verified, {summary.validation.needs_validation} need validation, {summary.validation.rejected} rejected
+                  </>
+                )}
               </span>
             </div>
             <p className="mt-3 text-lg font-semibold">{summary.headline}</p>
@@ -86,6 +122,19 @@ function ScanPage() {
                 </ol>
               </div>
             </div>
+            {summary.needsValidation && summary.needsValidation.length > 0 && (
+              <div className="mt-5 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide">Needs your input (no severity until answered)</p>
+                <ul className="mt-1 list-disc space-y-1 pl-5">
+                  {summary.needsValidation.map((n) => (
+                    <li key={n.title}>
+                      <span className="font-medium">{n.title}</span>
+                      {n.missingFact && <span className="muted block text-xs">{n.missingFact}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {summary.engineNote && <p className="muted mt-4 text-xs">{summary.engineNote}</p>}
           </section>
         )}
@@ -133,7 +182,10 @@ function ScanPage() {
               {open.map((f) => (
                 <details key={f.id} id={`f-${f.id}`} className="app-card group p-4" open={open.length <= 3}>
                   <summary className="flex cursor-pointer list-none items-start gap-3">
-                    <SeverityBadge severity={f.severity} />
+                    <span className="flex flex-col items-start gap-1">
+                      <SeverityBadge severity={f.severity} />
+                      <VerdictBadge verdict={f.verdict} />
+                    </span>
                     <span className="flex-1">
                       <span className="font-medium">
                         {f.priority ? <span className="muted mr-1">#{f.priority}</span> : null}
@@ -142,11 +194,23 @@ function ScanPage() {
                       <span className="muted block text-xs">
                         {f.category}
                         {f.file ? ` · ${f.file}${f.line ? `:${f.line}` : ''}` : ''} · confidence {f.confidence}
+                        {f.source ? ` · ${SOURCE_LABEL[f.source] ?? f.source}` : ''}
                       </span>
                     </span>
                   </summary>
                   <div className="mt-3 space-y-2 pl-1 text-sm">
+                    {f.threat_model && <p className="font-medium">{f.threat_model}</p>}
                     <p className="whitespace-pre-line">{f.description}</p>
+                    {parseList(f.trace_json).length > 0 && (
+                      <div>
+                        <p className="font-semibold">Source → sink</p>
+                        <ol className="mt-1 list-decimal space-y-0.5 pl-5 font-mono text-xs">
+                          {parseList(f.trace_json).map((t) => (
+                            <li key={t}>{t}</li>
+                          ))}
+                        </ol>
+                      </div>
+                    )}
                     {f.impact && (
                       <p>
                         <span className="font-semibold">Impact: </span>
@@ -158,6 +222,12 @@ function ScanPage() {
                         <span className="font-semibold">Fix: </span>
                         {f.recommendation}
                       </p>
+                    )}
+                    {f.verification && (
+                      <div className="rounded-lg border hairline p-3">
+                        <p className="font-semibold">Independent validation</p>
+                        <p className="muted mt-1 whitespace-pre-line text-xs">{f.verification}</p>
+                      </div>
                     )}
                     {f.poc && (
                       <div>
@@ -184,9 +254,44 @@ function ScanPage() {
               ))}
               {open.length === 0 && !live && <p className="muted text-sm">No open findings.</p>}
               {closed.length > 0 && (
-                <p className="muted text-xs">{closed.length} finding(s) dismissed as false positives or marked fixed.</p>
+                <details className="text-xs">
+                  <summary className="muted cursor-pointer">{closed.length} finding(s) rejected by the validator, dismissed as false positives, or marked fixed</summary>
+                  <ul className="mt-2 space-y-2">
+                    {closed.map((f) => (
+                      <li key={f.id} className="rounded-lg border hairline p-2">
+                        <span className="font-medium">{f.title}</span> <span className="muted">({f.status}{f.verdict ? `, ${f.verdict}` : ''})</span>
+                        {f.verification && <p className="muted mt-1 whitespace-pre-line">{f.verification}</p>}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
               )}
             </div>
+          </section>
+        )}
+
+        {d.skills.length > 0 && (
+          <section>
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide">
+              Methodology <span className="muted font-normal normal-case">— agentic security skills applied in this scan</span>
+            </h2>
+            <ul className="flex flex-wrap gap-2 text-xs">
+              {d.skills.map((id) => {
+                const sk = SKILL_BY_ID[id]
+                return sk ? (
+                  <li key={id}>
+                    <a href={sk.repoUrl} target="_blank" rel="noreferrer" className="inline-block rounded-full border hairline px-2.5 py-1 hover:border-[var(--muted)]" title={sk.howUsed}>
+                      {sk.name} <span className="muted">· {sk.publisher}</span>
+                    </a>
+                  </li>
+                ) : null
+              })}
+            </ul>
+            <p className="muted mt-2 text-xs">
+              <Link to="/skills" className="underline">
+                How each skill is used
+              </Link>
+            </p>
           </section>
         )}
 
