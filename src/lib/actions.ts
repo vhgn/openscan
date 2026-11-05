@@ -2,23 +2,25 @@
 import { first, now, run } from './db'
 import { productForRepo, rememberFacts } from './products'
 import { createScan, productIdForRepo, startProductScan } from './scanner/engine'
+import { resolveScanRepo, type PublicRepoError } from './github/repos'
 import type { ScanKind } from './types'
 
+export type StartScanResult = { ok: true; id: string; repo: string } | { ok: false; error: PublicRepoError | 'not_started'; message: string }
+
 /**
- * Starts a scan of one linked repository and returns the repository scan id. A security scan
- * runs inside its product (a product scan covering just this repo); a reading stands alone.
+ * Starts a scan of one repository and returns the repository scan id: a linked repository by id,
+ * or any public repository by "owner/name" or GitHub URL (linked to the user on the way).
+ * A security scan runs inside its product (a product scan covering just this repo); a reading stands alone.
  */
-export async function startScanFor(userId: string, repoId: number, kind: ScanKind = 'security'): Promise<string | null> {
-  const link = await first<{ full_name: string }>(
-    'SELECT r.full_name FROM user_repositories ur JOIN repositories r ON r.id = ur.repo_id WHERE ur.user_id = ? AND ur.repo_id = ?',
-    userId,
-    repoId,
-  )
-  if (!link) return null
-  if (kind === 'understand') return createScan(userId, repoId, 'understand', 'manual')
-  const productId = await productIdForRepo(userId, repoId, link.full_name.split('/')[0])
+export async function startScanFor(userId: string, ref: number | string, kind: ScanKind = 'security'): Promise<StartScanResult> {
+  const r = await resolveScanRepo(userId, ref)
+  if (!r.ok) return r
+  const { id: repoId, full_name } = r.repo
+  if (kind === 'understand') return { ok: true, id: await createScan(userId, repoId, 'understand', 'manual'), repo: full_name }
+  const productId = await productIdForRepo(userId, repoId, full_name.split('/')[0])
   const started = await startProductScan(userId, productId, 'manual', { repoIds: [repoId] })
-  return started?.scanIds[0] ?? null
+  const id = started?.scanIds[0]
+  return id ? { ok: true, id, repo: full_name } : { ok: false, error: 'not_started', message: `${full_name} could not be scanned right now.` }
 }
 
 /** Records the owner's answer and turns it into product memory every agent sees. Returns false if not found. */

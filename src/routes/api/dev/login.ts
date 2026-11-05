@@ -1,8 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { isDemoLoginEnabled } from '#/lib/env'
-import { batch, now } from '#/lib/db'
-import { gh } from '#/lib/github/app'
-import { publicTree, repoUpsert, type GhRepo } from '#/lib/github/repos'
+import { linkPublicRepo } from '#/lib/github/repos'
 import { createSession, sessionCookieHeader } from '#/lib/session'
 import { landingPathFor, upsertGithubUser } from '#/lib/users'
 import { safeNextPath } from '#/lib/redirect'
@@ -12,12 +10,6 @@ import { safeNextPath } from '#/lib/redirect'
  * repositories (read anonymously), so the whole flow can be tried without
  * creating a GitHub App. ?repos=owner/a,owner/b&next=/path
  */
-function hashId(name: string): number {
-  let h = 0
-  for (const c of name) h = (h * 31 + c.charCodeAt(0)) | 0
-  return Math.abs(h) || 1
-}
-
 export const Route = createFileRoute('/api/dev/login')({
   server: {
     handlers: {
@@ -29,27 +21,10 @@ export const Route = createFileRoute('/api/dev/login')({
           .map((s) => s.trim())
           .filter(Boolean)
         const user = await upsertGithubUser({ id: -1, login: 'demo-user', name: 'Demo User', avatar_url: null })
-        const ops: Array<[string, Array<string | number | null>]> = []
         for (const name of names) {
-          try {
-            const r = await gh<GhRepo>(`/repos/${name}`, null).catch(async (e) => {
-              // Anonymous API rate-limited: fall back to a synthetic record if the repo is public on jsDelivr.
-              for (const branch of ['main', 'master']) {
-                if ((await publicTree(name, branch))?.length) {
-                  return { id: hashId(name), full_name: name, default_branch: branch, private: false, html_url: `https://github.com/${name}`, description: null, language: null } satisfies GhRepo
-                }
-              }
-              throw e
-            })
-            // Negative ids mark anonymous/public demo repos (no installation).
-            const demo = { ...r, id: -Math.abs(r.id) }
-            ops.push(repoUpsert(demo, null))
-            ops.push(['INSERT OR IGNORE INTO user_repositories (user_id, repo_id, selected, created_at) VALUES (?, ?, 0, ?)', [user.id, demo.id, now()]])
-          } catch (e) {
-            console.error('demo repo lookup failed', name, e)
-          }
+          const r = await linkPublicRepo(user.id, name).catch((e) => ({ ok: false as const, message: String(e) }))
+          if (!r.ok) console.error('demo repo lookup failed', name, r.message)
         }
-        await batch(ops)
         const session = await createSession(user.id)
         return new Response(null, {
           status: 302,

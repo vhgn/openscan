@@ -6,14 +6,25 @@ import { getProduct } from '#/lib/products'
 import { startProductScan } from '#/lib/scanner/engine'
 import { startScanFor } from '#/lib/actions'
 
+const kind = z.enum(['understand', 'security']).default('security')
 const body = z.union([
   z.object({ productId: z.string() }),
-  z.object({ repoId: z.number().int(), kind: z.enum(['understand', 'security']).default('security') }),
+  // Any public repository by "owner/name" or GitHub URL, no GitHub App install needed.
+  z.object({ repo: z.string().trim().min(1).max(300), kind }),
+  z.object({ repoId: z.number().int(), kind }),
 ])
+
+const START_SCAN_ERRORS = {
+  invalid: { code: 'invalid_repo', status: 400 },
+  not_found: { code: 'repo_not_found', status: 404 },
+  private: { code: 'repo_private', status: 404 },
+  unavailable: { code: 'github_unavailable', status: 503 },
+  not_started: { code: 'scan_not_started', status: 409 },
+} as const
 
 /**
  * REST: GET /api/scans (product scans with their repository scans, plus the flat list),
- * POST /api/scans {productId} reviews a product, {repoId, kind?} reviews one repo inside its product.
+ * POST /api/scans {productId} reviews a product; {repo: "owner/name"} or {repoId}, plus kind?, reviews one repo inside its product.
  */
 export const Route = createFileRoute('/api/scans/')({
   server: {
@@ -35,9 +46,9 @@ export const Route = createFileRoute('/api/scans/')({
           if (!started) return Response.json({ error: 'product_has_no_repositories' }, { status: 409 })
           return Response.json({ productScanId: started.id, scanIds: started.scanIds, url: `/products/${data.productId}` }, { status: 202 })
         }
-        const id = await startScanFor(user.id, data.repoId, data.kind)
-        if (!id) return Response.json({ error: 'repo_not_found' }, { status: 404 })
-        return Response.json({ id, url: `/scans/${id}` }, { status: 202 })
+        const r = await startScanFor(user.id, 'repo' in data ? data.repo : data.repoId, data.kind)
+        if (!r.ok) return Response.json({ error: START_SCAN_ERRORS[r.error].code, message: r.message }, { status: START_SCAN_ERRORS[r.error].status })
+        return Response.json({ id: r.id, repo: r.repo, url: `/scans/${r.id}` }, { status: 202 })
       },
     },
   },

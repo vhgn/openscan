@@ -4,7 +4,7 @@ import { ErrorNote, Lede, Page, Progress, Squiggle, StatusMark, Title, phaseLabe
 import { QuestionCard, QuestionList } from '#/components/QuestionCard'
 import { ChatGPTConnect } from '#/components/ChatGPTConnect'
 import { PREFERENCE_STEPS, PreferencesForm } from '#/components/PreferencesForm'
-import { finishOnboarding, getInstallTargets, refreshRepos, savePreferences, saveRepoSelection, skipChatGPT, type OnboardingData } from '#/server-fns/app'
+import { addPublicRepo, finishOnboarding, getInstallTargets, refreshRepos, savePreferences, saveRepoSelection, skipChatGPT, type OnboardingData } from '#/server-fns/app'
 import type { InstallTarget } from '#/lib/github/repos'
 
 
@@ -149,6 +149,51 @@ function AccountList({ data, targets, compact = false }: { data: OnboardingData;
   )
 }
 
+/** Adds any public repository by owner/repo or GitHub link; no app install needed. */
+function AddPublicRepo({ onAdded, className = '' }: { onAdded?: (id: number) => void; className?: string }) {
+  const router = useRouter()
+  const [value, setValue] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <form
+      className={className}
+      onSubmit={async (e) => {
+        e.preventDefault()
+        if (!value.trim()) return
+        setBusy(true)
+        setError(null)
+        try {
+          const { id } = await addPublicRepo({ data: { repo: value.trim() } })
+          onAdded?.(id)
+          setValue('')
+          await router.invalidate()
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusy(false)
+        }
+      }}
+    >
+      <div className="flex flex-wrap items-end gap-3">
+        <input
+          className="field min-w-[12rem] flex-1 font-sans text-[14px]"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder="owner/repo or https://github.com/owner/repo"
+          aria-label="Public repository"
+          spellCheck={false}
+          autoCapitalize="off"
+        />
+        <button className="btn btn-sm" disabled={!value.trim() || busy}>
+          {busy ? 'Adding…' : 'Add'}
+        </button>
+      </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </form>
+  )
+}
+
 function ReposStep({ data }: { data: OnboardingData }) {
   const targets = useInstallTargets()
   return data.repos.length === 0 ? <ConnectGitHub data={data} targets={targets} /> : <PickRepos data={data} targets={targets} />
@@ -170,6 +215,9 @@ function ConnectGitHub({ data, targets }: { data: OnboardingData; targets: Insta
       <p className="mt-6 text-[16px] italic leading-[1.6] text-muted">
         Not an owner of the organization? GitHub sends the install request to its owners, and the repositories appear here once one of them approves.
       </p>
+      <p className="label mt-12">Or review a public repository</p>
+      <p className="mt-2 text-[16px] leading-[1.6] text-ink-3">Open-source code needs no install: type its owner/repo or paste its GitHub link.</p>
+      <AddPublicRepo className="mt-3" />
     </div>
   )
 }
@@ -260,6 +308,12 @@ function PickRepos({ data, targets }: { data: OnboardingData; targets: InstallTa
             )
           })}
           {shown.length === 0 && <p className="mt-6 text-[17px] italic text-muted">No repository matches &ldquo;{filter}&rdquo;.</p>}
+
+          <section className="mt-12">
+            <h2 className="label border-b border-rule pb-2">Add a public repository</h2>
+            <p className="mt-3 font-sans text-[13px] text-muted">Any public GitHub repository, no install needed: owner/repo or its link.</p>
+            <AddPublicRepo className="mt-2" onAdded={(id) => setSelected((s) => (s.includes(id) ? s : [...s, id]))} />
+          </section>
         </>
       }
       side={

@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { all, batch, first, now, run } from '#/lib/db'
 import { currentUser, requireUser } from '#/lib/session'
 import { installUrl, manageInstallationUrl, githubConfigured } from '#/lib/github/app'
-import { listInstallTargets, listUserRepos, syncUserRepos } from '#/lib/github/repos'
+import { linkPublicRepo, listInstallTargets, listUserRepos, syncUserRepos } from '#/lib/github/repos'
 import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
 import { createScan, loadPreferences, productIdForRepo, startProductScan } from '#/lib/scanner/engine'
 import { listFindings, listProductScans, listQuestions, scanDetail } from '#/lib/queries'
@@ -25,7 +25,7 @@ import {
   saveProduct,
   setPushForAllProducts,
 } from '#/lib/products'
-import { answerQuestionFor, setFindingStatus } from '#/lib/actions'
+import { answerQuestionFor, setFindingStatus, startScanFor } from '#/lib/actions'
 import { isDemoLoginEnabled } from '#/lib/env'
 import { preferencesSchema, type OnboardingStep, type UserRow } from '#/lib/types'
 
@@ -137,6 +137,16 @@ export const saveRepoSelection = createServerFn({ method: 'POST' })
     // Already linked ChatGPT (e.g. coming back to change repos): start reading right away.
     if (user.chatgpt_cookie_enc || user.onboarding_step !== 'repos') await startUnderstanding(user.id)
     return { ok: true }
+  })
+
+/** Adds a public repository by "owner/name" or GitHub URL, no app install needed, and selects it. */
+export const addPublicRepo = createServerFn({ method: 'POST' })
+  .validator(z.object({ repo: z.string().trim().min(1).max(300) }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    const r = await linkPublicRepo(user.id, data.repo, { select: true })
+    if (!r.ok) throw new Error(r.message)
+    return { id: r.repo.id, fullName: r.repo.full_name }
   })
 
 /** Called by the client once the ChatGPT widget reports "authenticated". */
@@ -257,6 +267,16 @@ export const getScan = createServerFn({ method: 'GET' })
     const detail = await scanDetail(user.id, data.id)
     if (!detail) throw redirect({ to: '/home' })
     return { ...detail, user: publicUser(user) }
+  })
+
+/** Reviews one repository: any public one typed as "owner/name" or a GitHub URL (linked on the way), or a linked one. */
+export const scanRepo = createServerFn({ method: 'POST' })
+  .validator(z.object({ repo: z.string().trim().min(1).max(300) }))
+  .handler(async ({ data }) => {
+    const user = await requireUser()
+    const r = await startScanFor(user.id, data.repo, 'security')
+    if (!r.ok) throw new Error(r.message)
+    return { id: r.id }
   })
 
 export const updateFindingStatus = createServerFn({ method: 'POST' })

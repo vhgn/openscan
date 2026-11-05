@@ -2,6 +2,7 @@
 import { gh, GitHubError, installationToken, installUrlFor, manageInstallationUrl, userToken } from './app'
 import { all, batch, first, now, run } from '../db'
 import type { RepoRow, UserRow } from '../types'
+import { parseRepoId, parseRepoRef } from './repo-ref'
 
 export interface GhRepo {
   id: number
@@ -151,6 +152,82 @@ export function listUserRepos(userId: string) {
 
 export function getRepo(id: number) {
   return first<RepoRow>('SELECT * FROM repositories WHERE id = ?', id)
+}
+
+/** Stable positive id for a public repo GitHub's API couldn't describe (rate-limited); stored negated like any public repo. */
+export function syntheticRepoId(fullName: string): number {
+  let h = 0
+  for (const c of fullName.toLowerCase()) h = (h * 31 + c.charCodeAt(0)) | 0
+  return Math.abs(h) || 1
+}
+
+export type PublicRepoError = 'invalid' | 'not_found' | 'private'
+export type PublicRepoResult = { ok: true; repo: RepoRow } | { ok: false; error: PublicRepoError; message: string }
+
+const PUBLIC_REPO_ERRORS: Record<PublicRepoError, (ref: string) => string> = {
+  invalid: (ref) => `"${ref}" is not a GitHub repository. Use owner/name or a github.com link.`,
+  not_found: (ref) => `No public repository ${ref} on GitHub. For a private one, install the GitHub App on it.`,
+  private: (ref) => `${ref} is private. Install the GitHub App on it to have it reviewed.`,
+}
+const publicRepoError = (error: PublicRepoError, ref: string): PublicRepoResult => ({ ok: false, error, message: PUBLIC_REPO_ERRORS[error](ref) })
+
+/** Anonymous lookup of a public repository; falls back to jsDelivr's mirror when the anonymous API is rate-limited. */
+async function lookupPublicRepo(fullName: string): Promise<GhRepo | PublicRepoError> {
+  try {
+    const r = await gh<GhRepo>(`/repos/${fullName}`, null)
+    return r.private ? 'private' : r
+  } catch (e) {
+    if (!(e instanceof GitHubError)) throw e
+    if (e.status === 404) return 'not_found'
+    if (![401, 403, 429].includes(e.status)) throw e
+    for (const branch of ['main', 'master']) {
+      if ((await publicTree(fullName, branch))?.length) {
+        return { id: syntheticRepoId(fullName), full_name: fullName, default_branch: branch, private: false, html_url: `https://github.com/${fullName}`, description: null, language: null }
+      }
+    }
+    throw e
+  }
+}
+
+/**
+ * Links a PUBLIC repository to the user by name ("owner/name" or a GitHub URL),
+ * no GitHub App install needed. It is stored under a negative id with no
+ * installation, so it is always read anonymously, even when someone else has the
+ * app installed on it. A repository the user already has linked is returned as is.
+ */
+export async function linkPublicRepo(userId: string, ref: string, opts: { select?: boolean } = {}): Promise<PublicRepoResult> {
+  const fullName = parseRepoRef(ref)
+  if (!fullName) return publicRepoError('invalid', ref.trim())
+  const lower = fullName.toLowerCase()
+  let repo: RepoRow | null = (await listUserRepos(userId)).find((r) => r.full_name.toLowerCase() === lower) ?? null
+  if (!repo) {
+    // Someone already added it by name: reuse that row (and its repository reading) without asking GitHub again.
+    repo = await first<RepoRow>('SELECT * FROM repositories WHERE id < 0 AND lower(full_name) = ? LIMIT 1', lower)
+    if (!repo) {
+      const found = await lookupPublicRepo(fullName)
+      if (typeof found === 'string') return publicRepoError(found, fullName)
+      const row = { ...found, id: -Math.abs(found.id) }
+      await batch([repoUpsert(row, null)])
+      repo = await getRepo(row.id)
+      if (!repo) throw new Error(`Could not save ${fullName}`)
+    }
+    await run('INSERT OR IGNORE INTO user_repositories (user_id, repo_id, selected, created_at) VALUES (?, ?, 0, ?)', userId, repo.id, now())
+  }
+  if (opts.select) await run('UPDATE user_repositories SET selected = 1 WHERE user_id = ? AND repo_id = ?', userId, repo.id)
+  return { ok: true, repo }
+}
+
+/**
+ * A repository the user may scan: a linked one by id (number or numeric string),
+ * by "owner/name", or any public repository by name or URL (linked on the fly).
+ */
+export async function resolveScanRepo(userId: string, ref: number | string): Promise<PublicRepoResult> {
+  const id = typeof ref === 'number' ? ref : parseRepoId(ref)
+  if (id !== null) {
+    const linked = (await listUserRepos(userId)).find((r) => r.id === id)
+    return linked ? { ok: true, repo: linked } : publicRepoError('not_found', String(ref))
+  }
+  return linkPublicRepo(userId, String(ref))
 }
 
 /** Token for reading repository contents: installation token, or null for public demo repos. */

@@ -1,11 +1,11 @@
 import { Link, useRouter } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { Empty, Lede, Margin, Page, SectionHead, Severity, StatusMark, Title, plural, spell } from '#/components/ui'
+import { Empty, ErrorNote, Lede, Margin, Page, SectionHead, Severity, StatusMark, Title, plural, spell } from '#/components/ui'
 import { QuestionCard, QuestionList } from '#/components/QuestionCard'
 import { Select } from '#/components/Select'
 import { FindingFilters, applyFindingFilters, type FindingFilterState } from '#/components/FindingFilters'
 import { ProductScans, isLive } from '#/components/ProductScans'
-import { scanProduct, type DashboardData } from '#/server-fns/app'
+import { scanProduct, scanRepo, type DashboardData } from '#/server-fns/app'
 
 
 const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info']
@@ -123,6 +123,8 @@ export function Brief({ data }: { data: DashboardData }) {
         </button>
       </form>
 
+      <PublicRepoScan />
+
       {data.questions.length > 0 && (
         <>
           <SectionHead aside="It couldn’t settle these from the code" hint="Things the reviewer could not tell from the code alone, like who can reach an endpoint. Your answers are remembered for every later review of the product.">Questions for you</SectionHead>
@@ -194,5 +196,49 @@ export function Brief({ data }: { data: DashboardData }) {
       <SectionHead hint="One review per product: each runs a brief per repository. Newest first, including reviews still in progress.">Earlier reviews</SectionHead>
       <ProductScans items={data.productScans} empty="No reviews yet." />
     </Page>
+  )
+}
+
+/** Review any public repository by owner/repo or GitHub link; it is linked on the way, no app install needed. */
+function PublicRepoScan() {
+  const router = useRouter()
+  const [repo, setRepo] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  return (
+    <form
+      className="mt-3 font-sans text-[14px]"
+      onSubmit={async (e) => {
+        e.preventDefault()
+        if (!repo.trim()) return
+        setBusy(true)
+        setError(null)
+        try {
+          const { id } = await scanRepo({ data: { repo: repo.trim() } })
+          await router.navigate({ to: '/scans/$scanId', params: { scanId: id } })
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err))
+        } finally {
+          setBusy(false)
+        }
+      }}
+    >
+      <div className="flex flex-wrap items-end gap-3">
+        <span className="pb-1.5 text-muted">or any public repository</span>
+        <input
+          className="field w-[18rem] max-w-full"
+          value={repo}
+          onChange={(e) => setRepo(e.target.value)}
+          placeholder="owner/repo or a GitHub link"
+          aria-label="Public repository to review"
+          spellCheck={false}
+          autoCapitalize="off"
+        />
+        <button className="btn btn-quiet btn-sm" disabled={!repo.trim() || busy}>
+          {busy ? 'Starting…' : 'Review'}
+        </button>
+      </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </form>
   )
 }
