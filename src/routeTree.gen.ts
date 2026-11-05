@@ -17,6 +17,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SkillsRouteImport } from './routes/skills'
 import { Route as ProductsProductIdRouteImport } from './routes/products.$productId'
 import { Route as ScansScanIdRouteImport } from './routes/scans.$scanId'
+import { Route as ApiAgentSplatRouteImport } from './routes/api/agent/$'
 import { Route as ApiAuthLogoutRouteImport } from './routes/api/auth/logout'
 import { Route as ApiChatgptSplatRouteImport } from './routes/api/chatgpt/$'
 import { Route as ApiDevLoginRouteImport } from './routes/api/dev/login'
@@ -65,6 +66,11 @@ const ProductsProductIdRoute = ProductsProductIdRouteImport.update({
 const ScansScanIdRoute = ScansScanIdRouteImport.update({
   id: '/scans/$scanId',
   path: '/scans/$scanId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAgentSplatRoute = ApiAgentSplatRouteImport.update({
+  id: '/api/agent/$',
+  path: '/api/agent/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAuthLogoutRoute = ApiAuthLogoutRouteImport.update({
@@ -122,6 +128,7 @@ export interface FileRoutesByFullPath {
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
+  '/api/agent/$': typeof ApiAgentSplatRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
   '/api/chatgpt/$': typeof ApiChatgptSplatRoute
   '/api/dev/login': typeof ApiDevLoginRoute
@@ -141,6 +148,7 @@ export interface FileRoutesByTo {
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
+  '/api/agent/$': typeof ApiAgentSplatRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
   '/api/chatgpt/$': typeof ApiChatgptSplatRoute
   '/api/dev/login': typeof ApiDevLoginRoute
@@ -161,6 +169,7 @@ export interface FileRoutesById {
   '/skills': typeof SkillsRoute
   '/products/$productId': typeof ProductsProductIdRoute
   '/scans/$scanId': typeof ScansScanIdRoute
+  '/api/agent/$': typeof ApiAgentSplatRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
   '/api/chatgpt/$': typeof ApiChatgptSplatRoute
   '/api/dev/login': typeof ApiDevLoginRoute
@@ -182,6 +191,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
+    | '/api/agent/$'
     | '/api/auth/logout'
     | '/api/chatgpt/$'
     | '/api/dev/login'
@@ -201,6 +211,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
+    | '/api/agent/$'
     | '/api/auth/logout'
     | '/api/chatgpt/$'
     | '/api/dev/login'
@@ -220,6 +231,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/products/$productId'
     | '/scans/$scanId'
+    | '/api/agent/$'
     | '/api/auth/logout'
     | '/api/chatgpt/$'
     | '/api/dev/login'
@@ -240,6 +252,7 @@ export interface RootRouteChildren {
   SkillsRoute: typeof SkillsRoute
   ProductsProductIdRoute: typeof ProductsProductIdRoute
   ScansScanIdRoute: typeof ScansScanIdRoute
+  ApiAgentSplatRoute: typeof ApiAgentSplatRoute
   ApiAuthLogoutRoute: typeof ApiAuthLogoutRoute
   ApiChatgptSplatRoute: typeof ApiChatgptSplatRoute
   ApiDevLoginRoute: typeof ApiDevLoginRoute
@@ -307,6 +320,13 @@ declare module '@tanstack/react-router' {
       path: '/scans/$scanId'
       fullPath: '/scans/$scanId'
       preLoaderRoute: typeof ScansScanIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/agent/$': {
+      id: '/api/agent/$'
+      path: '/api/agent/$'
+      fullPath: '/api/agent/$'
+      preLoaderRoute: typeof ApiAgentSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth/logout': {
@@ -384,6 +404,7 @@ const rootRouteChildren: RootRouteChildren = {
   SkillsRoute: SkillsRoute,
   ProductsProductIdRoute: ProductsProductIdRoute,
   ScansScanIdRoute: ScansScanIdRoute,
+  ApiAgentSplatRoute: ApiAgentSplatRoute,
   ApiAuthLogoutRoute: ApiAuthLogoutRoute,
   ApiChatgptSplatRoute: ApiChatgptSplatRoute,
   ApiDevLoginRoute: ApiDevLoginRoute,
