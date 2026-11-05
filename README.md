@@ -229,11 +229,265 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 | `understand` | `init → read* → profile` | Onboarding "AI reads your repo": builds a repo profile (stack, entry points, data stores, auth, sensitive areas) and raises or self-answers questions |
 | `security` | `init → deps → review* → validate* → triage` | The report. `deps` runs the deterministic signals: OSV, install scripts, Node/PHP/GitLab/Brotli runtime advisories, GitHub code-scanning import. `review` does batched AI code review (diff-first on push). `validate` sends each serious finding to an **independent validator** that confirms it, marks it needs-validation (which raises a question for you), or rejects it. `triage` ranks findings, writes *what matters* / *next actions*, and adds PoCs when `depth = deep_poc` |
 
+Each state below is `scans.phase`. A self-loop is one more queue message for the same phase (the next file batch, the next two findings to validate, or another Codex poll). If a step throws, the same phase is retried after 10 s × attempt; after 3 attempts the scan is marked `failed`. The cron also re-enqueues any queued or running scan with no update in 10 minutes.
+
+**`understand`**
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> init
+    init --> read : engine ai or heuristic
+    init --> codex_recon : engine codex
+    note right of init
+        fetch git tree (jsDelivr fallback for demo repos)
+        select top 30 files
+        heuristic questions when there is no LLM
+    end note
+
+    read --> read : next batch, up to 6 files and 45k chars
+    note right of read
+        AI reader agent with the recon playbook
+        collects notes, answers its own open questions,
+        raises up to 3 new questions per batch
+        heuristic mode keeps README and manifests
+    end note
+    read --> profile : no files left
+
+    codex_recon --> codex_recon_wait : start Codex task (Ask mode)
+    codex_recon --> read : no ChatGPT session (fallback)
+    codex_recon_wait --> codex_recon_wait : poll every 30s, timeout 45 min
+    codex_recon_wait --> done : completed with valid JSON
+    codex_recon_wait --> read : failed, timed out or bad JSON (fallback)
+
+    profile --> done
+    note right of profile
+        profile agent or heuristicProfile
+        writes repositories.profile_json
+        stores profile facts in product memory
+    end note
+    done --> [*]
+```
+
+**`security`**
+
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> init
+    init --> deps
+    note right of init
+        fetch git tree, record commit sha
+        push scans fetch changed files and put them first
+        product memory skips files reviewed at the same blob hash
+        select 20, 35 or 50 files by depth, boost sensitive areas
+        pick lockfiles and runtime files
+    end note
+
+    deps --> review : engine ai or heuristic
+    deps --> codex_hunt : engine codex
+    note right of deps
+        deterministic signals
+        OSV.dev for npm, PyPI, Go, crates.io, RubyGems
+        Brotli copies and install scripts
+        Node, PHP and GitLab runtime advisories
+        GitHub code-scanning alerts import
+    end note
+
+    review --> review : next batch
+    note right of review
+        heuristic hits passed to the AI as hints to verify
+        reviewer agent with the hunt playbook (differential on push)
+        findings deduped by fingerprint, remembered verdicts reused
+        reviewed files recorded with their blob hash
+    end note
+    review --> validate : AI engine and serious findings queued
+    review --> triage : heuristic, or nothing to validate
+
+    validate --> validate : next 2 findings
+    note right of validate
+        independent validator agent with fresh context
+        fp-check gates and triage brocards
+        confirmed, needs_validation (raises a question)
+        or rejected (dismissed)
+        verdict remembered with the file blob hash
+    end note
+    validate --> triage : queue empty
+
+    codex_hunt --> codex_hunt_wait : start hunt task
+    codex_hunt --> review : no ChatGPT session (fallback)
+    codex_hunt_wait --> codex_hunt_wait : poll every 30s
+    codex_hunt_wait --> codex_validate : findings to validate
+    codex_hunt_wait --> triage : nothing to validate
+    codex_hunt_wait --> review : failed, timed out or bad JSON (fallback)
+
+    codex_validate --> codex_validate_wait : start validate task
+    codex_validate --> validate : no ChatGPT session (fallback)
+    codex_validate_wait --> codex_validate_wait : poll every 30s
+    codex_validate_wait --> triage : verdicts applied
+    codex_validate_wait --> validate : Codex failure, validate directly
+
+    triage --> done
+    note right of triage
+        AI triage lead ranks, re-scores and drops false positives
+        never dismisses a validator-confirmed finding
+        writes PoCs when depth is deep_poc
+        heuristic mode sorts by severity x confidence
+        writes summary_json with stats and validation counts
+    end note
+    done --> [*]
+```
+
 **Agents** (`src/lib/ai/agents.ts`) are role prompts with zod output schemas: *reader*, *architect*, *reviewer*, *validator*, *triage lead*. Their methodology comes from published agentic security skills, distilled into playbooks (`src/lib/skills/playbooks.ts`). [SKILLS.md](./SKILLS.md) maps every skill to its stage. Calls go through the AI SDK (`streamText` + `Output.object`), with a tolerant JSON fallback. Static-analyzer hits are passed to the reviewer as hints to confirm or reject.
 
 **Heuristic engine.** If the user skips ChatGPT, their session expires, or `AI_MODE=heuristic`, the same pipeline runs with deterministic rules (secrets, injection sinks, TLS off, CI risks) plus OSV. Scans never fail just because the AI is unavailable.
 
-### Data model (`migrations/0001_init.sql`)
+### Data model (`migrations/`)
+
+```mermaid
+erDiagram
+    USERS ||--o{ SESSIONS : "authenticates"
+    USERS ||--o| PREFERENCES : "has"
+    USERS ||--o{ USER_INSTALLATIONS : "linked to"
+    INSTALLATIONS ||--o{ USER_INSTALLATIONS : "shared by"
+    INSTALLATIONS ||--o{ REPOSITORIES : "grants"
+    USERS ||--o{ USER_REPOSITORIES : "sees"
+    REPOSITORIES ||--o{ USER_REPOSITORIES : "visible to"
+    USERS ||--o{ PRODUCTS : "owns"
+    PRODUCTS ||--o{ PRODUCT_REPOSITORIES : "groups"
+    REPOSITORIES ||--o{ PRODUCT_REPOSITORIES : "member of"
+    PRODUCTS ||--o{ MEMORY : "remembers"
+    USERS ||--o{ SCANS : "runs"
+    REPOSITORIES ||--o{ SCANS : "scanned by"
+    PRODUCTS |o--o{ SCANS : "scoped to"
+    SCANS ||--o{ SCAN_EVENTS : "logs"
+    SCANS ||--o{ FINDINGS : "produces"
+    REPOSITORIES ||--o{ FINDINGS : "located in"
+    USERS ||--o{ QUESTIONS : "is asked"
+    SCANS |o--o{ QUESTIONS : "raises"
+    REPOSITORIES |o--o{ QUESTIONS : "about"
+    PRODUCTS |o--o{ QUESTIONS : "shared across"
+
+    USERS {
+        TEXT id PK
+        INTEGER github_id UK
+        TEXT login
+        TEXT gh_token_enc "AES-GCM"
+        TEXT gh_refresh_enc "AES-GCM"
+        TEXT chatgpt_cookie_enc "AES-GCM signed LWC cookie"
+        TEXT onboarding_step
+        INTEGER onboarded_at
+    }
+    SESSIONS {
+        TEXT id PK "sha256 of cookie token"
+        TEXT user_id FK
+        INTEGER expires_at
+    }
+    PREFERENCES {
+        TEXT user_id PK
+        TEXT json "frequency, depth, focus, context"
+    }
+    INSTALLATIONS {
+        INTEGER id PK "GitHub installation id"
+        TEXT account_login
+        TEXT account_type
+        TEXT repository_selection
+    }
+    USER_INSTALLATIONS {
+        TEXT user_id PK
+        INTEGER installation_id PK
+    }
+    REPOSITORIES {
+        INTEGER id PK "negative = public demo repo"
+        INTEGER installation_id
+        TEXT full_name UK
+        TEXT default_branch
+        TEXT profile_json "AI repo profile"
+        INTEGER understood_at
+    }
+    USER_REPOSITORIES {
+        TEXT user_id PK
+        INTEGER repo_id PK
+        INTEGER selected
+        TEXT codex_env_id
+        INTEGER codex_checked_at
+    }
+    PRODUCTS {
+        TEXT id PK
+        TEXT user_id FK
+        TEXT name
+    }
+    PRODUCT_REPOSITORIES {
+        TEXT product_id PK
+        INTEGER repo_id PK
+    }
+    MEMORY {
+        TEXT id PK
+        TEXT product_id FK
+        INTEGER repo_id
+        TEXT kind "fact, reviewed, verdict"
+        TEXT key "unique per product and kind"
+        TEXT content_hash "git blob sha"
+        INTEGER hits
+    }
+    SCANS {
+        TEXT id PK
+        TEXT kind "understand, security"
+        TEXT trigger "onboarding, manual, schedule, push"
+        TEXT status "queued, running, completed, failed"
+        TEXT phase "state machine cursor"
+        INTEGER progress
+        TEXT engine "codex, ai, heuristic"
+        TEXT commit_sha
+        TEXT state_json "resumable scan state"
+        TEXT summary_json
+        TEXT codex_tasks_json
+        TEXT product_id
+        TEXT run_id "groups a product scan"
+        INTEGER attempts
+    }
+    SCAN_EVENTS {
+        INTEGER id PK
+        TEXT scan_id FK
+        TEXT level
+        TEXT message
+    }
+    FINDINGS {
+        TEXT id PK
+        TEXT scan_id FK
+        TEXT severity
+        TEXT category
+        TEXT title
+        TEXT file
+        TEXT fingerprint "sha256 of repo, category, title, file"
+        TEXT verdict "confirmed, needs_validation, rejected"
+        TEXT source "ai-review, heuristic, osv, runtime-advisory, code-scanning"
+        INTEGER priority
+        TEXT poc
+        TEXT trace_json
+        TEXT status "open, dismissed"
+    }
+    QUESTIONS {
+        TEXT id PK
+        TEXT user_id FK
+        TEXT question
+        TEXT status "open, auto_answered, answered, dismissed"
+        TEXT answer
+        TEXT answer_source "ai, user"
+        TEXT product_id
+    }
+    LWC_STORE {
+        TEXT key PK "ChatGPT SDK session store"
+        TEXT value
+        INTEGER expires_at
+    }
+    APP_SETTINGS {
+        TEXT key PK
+        TEXT value
+    }
+```
+
+`scans.product_id` and `questions.product_id` were added by `ALTER TABLE` without a foreign key; the link to `products` is kept in app code. `lwc_store` and `app_settings` stand alone.
 
 `users` · `sessions` · `oauth_clients` · `oauth_requests` · `oauth_codes` · `oauth_grants` · `oauth_tokens` (MCP OAuth, `0005_mcp_oauth.sql`) · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` · `memory` · `preferences` · `scans` (status/phase/progress/state/summary/skills/Codex tasks/product/run) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
 
