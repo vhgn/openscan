@@ -87,6 +87,15 @@ test('prompts carry the role marker, read-only rules and the JSON contract', () 
   assert.ok(v.skills.includes('tob-fp-check'))
 })
 
+test('question prompts carry the high-impact rule and the skipped questions', () => {
+  const r = reconPrompt({ repo: 'acme/api', userContext: '', openQuestions: [], skippedQuestions: ['Which logging library is used?'] })
+  assert.match(r.prompt, /Questions for you/)
+  assert.match(r.prompt, /small architecture or implementation details/)
+  assert.match(r.prompt, /Skipped questions[^\n]*\n- Which logging library is used\?/)
+  const h = huntPrompt({ repo: 'acme/api', prefs: defaultPreferences, profile: null, knownAnswers: [], openQuestions: [], alreadyFound: [], priorityFiles: [] })
+  assert.match(h.prompt, /Skipped questions[^\n]*\n\(none\)/)
+})
+
 test('parseTaskOutput takes the last message that satisfies the contract', () => {
   const good = { verdicts: [{ index: 0, restatedClaim: 'x', gates: { reachability: 'pass', realImpact: 'pass', noPreventingControl: 'pass', environment: 'pass' }, brocardFailed: 0, decision: 'confirmed', severity: 'high', reasoning: 'r', missingFact: '', correctedRecommendation: '' }] }
   assert.deepEqual(parseTaskOutput('validate', ['Plan: …', '```json\n' + JSON.stringify(good) + '\n```', 'Done.'])?.verdicts[0].decision, 'confirmed')

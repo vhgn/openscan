@@ -33,7 +33,7 @@ Rules:
 ${schema}`
 }
 
-export function reconPrompt(input: { repo: string; userContext: string; openQuestions: Array<{ id: string; question: string }> }) {
+export function reconPrompt(input: { repo: string; userContext: string; openQuestions: Array<{ id: string; question: string }>; skippedQuestions?: string[] }) {
   const pb = reconPlaybook()
   return {
     skills: pb.skills,
@@ -43,12 +43,14 @@ TASK: Build the repository profile a security reviewer will rely on, and list th
 ${A.PROFILE_SYSTEM}
 ${pb.text}
 Explore the whole repository yourself (entry points, auth, data stores, deployment files, CI). Put "UNENFORCED: …" items in notes.
-Questions must change security risk if answered (exposure, data sensitivity, auth model, tenancy, deployment); max 6. Answer any open question below that the code settles (use its id in answers).
+${A.QUESTION_RULES}
+Max 6 questions, ordered by impact (most impactful first). Answer any open question below that the code settles (use its id in answers).
 
 Repository: ${input.repo}
 Owner-provided context: ${input.userContext || '(none)'}
 Open questions:
-${input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') || '(none)'}`,
+${input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') || '(none)'}
+${A.skippedBlock(input.skippedQuestions)}`,
   }
 }
 
@@ -61,6 +63,7 @@ export function huntPrompt(input: {
   alreadyFound: string[]
   changed?: string[]
   priorityFiles: string[]
+  skippedQuestions?: string[]
 }) {
   const pb = huntPlaybook({ differential: Boolean(input.changed?.length), paths: input.priorityFiles })
   const depth = input.prefs.depth === 'triage' ? 'a fast pass over the riskiest areas' : input.prefs.depth === 'deep_poc' ? 'a deep review; follow every untrusted input to its sinks' : 'a thorough review of the main attack surface'
@@ -81,6 +84,7 @@ Known answers from the owner:
 ${input.knownAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n') || '(none)'}
 Open questions (answer if the code settles them, by id):
 ${input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') || '(none)'}
+${A.skippedBlock(input.skippedQuestions)}
 ${input.changed?.length ? `CHANGED files in the triggering push (review these first): ${input.changed.slice(0, 60).join(', ')}` : ''}
 Start with these high-signal files: ${input.priorityFiles.slice(0, 25).join(', ') || '(choose yourself)'}`,
   }
