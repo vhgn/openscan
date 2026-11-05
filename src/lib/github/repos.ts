@@ -161,13 +161,14 @@ export function syntheticRepoId(fullName: string): number {
   return Math.abs(h) || 1
 }
 
-export type PublicRepoError = 'invalid' | 'not_found' | 'private'
+export type PublicRepoError = 'invalid' | 'not_found' | 'private' | 'unavailable'
 export type PublicRepoResult = { ok: true; repo: RepoRow } | { ok: false; error: PublicRepoError; message: string }
 
 const PUBLIC_REPO_ERRORS: Record<PublicRepoError, (ref: string) => string> = {
   invalid: (ref) => `"${ref}" is not a GitHub repository. Use owner/name or a github.com link.`,
   not_found: (ref) => `No public repository ${ref} on GitHub. For a private one, install the GitHub App on it.`,
   private: (ref) => `${ref} is private. Install the GitHub App on it to have it reviewed.`,
+  unavailable: (ref) => `Couldn't reach GitHub to look up ${ref}. Try again in a few minutes.`,
 }
 const publicRepoError = (error: PublicRepoError, ref: string): PublicRepoResult => ({ ok: false, error, message: PUBLIC_REPO_ERRORS[error](ref) })
 
@@ -177,15 +178,16 @@ async function lookupPublicRepo(fullName: string): Promise<GhRepo | PublicRepoEr
     const r = await gh<GhRepo>(`/repos/${fullName}`, null)
     return r.private ? 'private' : r
   } catch (e) {
-    if (!(e instanceof GitHubError)) throw e
-    if (e.status === 404) return 'not_found'
-    if (![401, 403, 429].includes(e.status)) throw e
+    if (e instanceof GitHubError && e.status === 404) return 'not_found'
+    console.error('public repo lookup failed', fullName, e)
+    // Rate-limited or GitHub unreachable: jsDelivr mirrors public repositories only.
     for (const branch of ['main', 'master']) {
-      if ((await publicTree(fullName, branch))?.length) {
+      const entries = await publicTree(fullName, branch).catch(() => null)
+      if (entries?.length) {
         return { id: syntheticRepoId(fullName), full_name: fullName, default_branch: branch, private: false, html_url: `https://github.com/${fullName}`, description: null, language: null }
       }
     }
-    throw e
+    return 'unavailable'
   }
 }
 
@@ -225,7 +227,7 @@ export async function resolveScanRepo(userId: string, ref: number | string): Pro
   const id = typeof ref === 'number' ? ref : parseRepoId(ref)
   if (id !== null) {
     const linked = (await listUserRepos(userId)).find((r) => r.id === id)
-    return linked ? { ok: true, repo: linked } : publicRepoError('not_found', String(ref))
+    return linked ? { ok: true, repo: linked } : { ok: false, error: 'not_found', message: `Repository ${id} is not linked to your account. Pass its owner/name instead.` }
   }
   return linkPublicRepo(userId, String(ref))
 }

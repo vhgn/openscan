@@ -1,18 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { z } from 'zod'
 import { userFromRequest } from '#/lib/session'
 import { listProductScans, listScans } from '#/lib/queries'
 import { getProduct } from '#/lib/products'
 import { startProductScan } from '#/lib/scanner/engine'
 import { startScanFor } from '#/lib/actions'
-
-const kind = z.enum(['understand', 'security']).default('security')
-const body = z.union([
-  z.object({ productId: z.string() }),
-  // Any public repository by "owner/name" or GitHub URL, no GitHub App install needed.
-  z.object({ repo: z.string().trim().min(1).max(300), kind }),
-  z.object({ repoId: z.number().int(), kind }),
-])
+import { StartScanBody } from '#/lib/api/contract'
 
 const START_SCAN_ERRORS = {
   invalid: { code: 'invalid_repo', status: 400 },
@@ -25,6 +17,7 @@ const START_SCAN_ERRORS = {
 /**
  * REST: GET /api/scans (product scans with their repository scans, plus the flat list),
  * POST /api/scans {productId} reviews a product; {repo: "owner/name"} or {repoId}, plus kind?, reviews one repo inside its product.
+ * Schemas (and public/openapi.json): src/lib/api/contract.ts.
  */
 export const Route = createFileRoute('/api/scans/')({
   server: {
@@ -37,7 +30,7 @@ export const Route = createFileRoute('/api/scans/')({
       POST: async ({ request }) => {
         const user = await userFromRequest(request)
         if (!user) return Response.json({ error: 'unauthenticated' }, { status: 401 })
-        const parsed = body.safeParse(await request.json().catch(() => ({})))
+        const parsed = StartScanBody.safeParse(await request.json().catch(() => ({})))
         if (!parsed.success) return Response.json({ error: 'invalid_body', issues: parsed.error.issues }, { status: 400 })
         const data = parsed.data
         if ('productId' in data) {
