@@ -92,7 +92,7 @@ export function Margin({ children, className = '' }: { children: ReactNode; clas
   )
 }
 
-export function SectionHead({ children, aside, className = 'mt-16' }: { children: ReactNode; aside?: ReactNode; className?: string }) {
+export function SectionHead({ children, aside, className = 'mt-20' }: { children: ReactNode; aside?: ReactNode; className?: string }) {
   return (
     <div className={`flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 ${className}`}>
       <h2 className="label">{children}</h2>

@@ -136,12 +136,12 @@ function ProductPage() {
           <ul className="mt-4">
             {rows.length === 0 && <Empty>Nothing remembered yet. Memory fills in as scans run.</Empty>}
             {rows.map((m) => (
-              <li key={m.id} className="grid grid-cols-[1fr_auto] items-baseline gap-4 border-t border-rule py-3 first:border-t-0">
+              <li key={m.id} className="grid grid-cols-[1fr_auto] items-baseline gap-4 border-t border-rule py-4 first:border-t-0">
                 <span className="min-w-0">
-                  <span className={`block ${m.kind === 'reviewed' ? 'truncate font-mono text-[13px]' : 'text-[17px] leading-[1.5]'}`}>
+                  <span className={`block ${m.kind === 'reviewed' ? 'truncate font-mono text-[13px]' : 'text-[17px] leading-[1.4]'}`}>
                     {m.kind === 'reviewed' ? m.key.slice(m.key.indexOf(':') + 1) : m.content}
                   </span>
-                  <span className="block font-sans text-[12px] text-muted">
+                  <span className="mt-0.5 block font-sans text-[12px] text-muted">
                     {m.repo ?? 'product-wide'}
                     {m.kind === 'reviewed' ? ` · ${m.content}` : ''}
                     {m.hits ? ` · reused ${m.hits}×` : ''} · {timeAgo(m.updatedAt)}

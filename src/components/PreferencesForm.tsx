@@ -223,7 +223,7 @@ export function PreferencesForm({
 
   return (
     <form
-      className="space-y-12"
+      className="space-y-16"
       onSubmit={(e) => {
         e.preventDefault()
         void submit()

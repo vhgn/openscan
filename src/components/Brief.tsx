@@ -1,7 +1,7 @@
 import { Link, useRouter } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { Empty, Lede, Margin, Page, SectionHead, Severity, StatusMark, Title, plural, spell, timeAgo } from '#/components/ui'
-import { QuestionCard } from '#/components/QuestionCard'
+import { QuestionCard, QuestionList } from '#/components/QuestionCard'
 import { Select } from '#/components/Select'
 import { FindingFilters, applyFindingFilters, type FindingFilterState } from '#/components/FindingFilters'
 import { scanProduct, startScan, type DashboardData } from '#/server-fns/app'
@@ -109,27 +109,27 @@ export function Brief({ data }: { data: DashboardData }) {
       {data.questions.length > 0 && (
         <>
           <SectionHead aside="It couldn’t settle these from the code">Questions for you</SectionHead>
-          <div className="mt-5 space-y-7">
+          <QuestionList className="mt-6">
             {data.questions.map((q) => (
               <QuestionCard key={q.id} q={q} />
             ))}
-          </div>
+          </QuestionList>
         </>
       )}
 
       <SectionHead aside={hidden > 0 ? `${hidden} below ${data.preferences.minSeverity} hidden` : 'Latest brief per repository'}>Open findings</SectionHead>
       <FindingFilters items={visible} value={filters} onChange={setFilters} />
-      <ol className="mt-4">
+      <ol className="mt-5">
         {visible.length === 0 && <Empty>No open findings.</Empty>}
         {visible.length > 0 && findings.length === 0 && <Empty>No open findings match these filters.</Empty>}
         {findings.map((f) => (
           <li key={f.id} className="border-t border-rule first:border-t-0">
-            <Link to="/scans/$scanId" params={{ scanId: f.scan_id }} hash={`f-${f.id}`} className="group grid gap-1 py-4 sm:grid-cols-[6.5rem_1fr] sm:gap-4">
-              <span className="pt-1.5">
+            <Link to="/scans/$scanId" params={{ scanId: f.scan_id }} hash={`f-${f.id}`} className="group grid gap-1 py-5 sm:grid-cols-[6.5rem_1fr] sm:gap-4">
+              <span className="pt-1">
                 <Severity severity={f.severity} />
               </span>
               <span className="min-w-0">
-                <span className="block text-[19px] leading-[1.4] group-hover:underline group-hover:decoration-1 group-hover:underline-offset-4">{f.title}</span>
+                <span className="block text-[18px] leading-[1.3] group-hover:underline group-hover:decoration-1 group-hover:underline-offset-4">{f.title}</span>
                 <span className="mt-0.5 block truncate font-sans text-[12.5px] text-muted">
                   {f.repo}
                   {f.file && (
@@ -156,19 +156,19 @@ export function Brief({ data }: { data: DashboardData }) {
       >
         Products
       </SectionHead>
-      <div className="mt-4 space-y-6">
+      <div className="mt-5 space-y-7">
         {data.products.length === 0 && <Empty>No products yet.</Empty>}
         {data.products.map((p) => (
-          <div key={p.id} className="relative border-t border-rule pt-4 first:border-t-0 first:pt-0">
+          <div key={p.id} className="relative border-t border-rule pt-7 first:border-t-0 first:pt-0">
             <Link to="/products/$productId" params={{ productId: p.id }} className="font-display text-[28px] leading-tight hover:underline hover:decoration-1 hover:underline-offset-4">
               {p.name}
             </Link>
-            <p className="mt-1 text-[17px] leading-[1.55] text-ink-3">
+            <p className="mt-1 text-[17px] leading-[1.45] text-ink-3">
               {plural(p.repos, 'repository', 'repositories')}. Its memory holds {plural(p.memory.facts, 'fact')}, {plural(p.memory.reviewed, 'reviewed file')} and{' '}
               {plural(p.memory.verdicts, 'verdict')}.
             </p>
             <button
-              className="btn btn-quiet btn-sm mt-3"
+              className="btn btn-quiet btn-sm mt-2.5"
               disabled={busy !== null || p.repos === 0}
               onClick={async () => {
                 setBusy(p.id)
@@ -192,14 +192,14 @@ export function Brief({ data }: { data: DashboardData }) {
         {data.scans.length === 0 && <Empty>No scans yet.</Empty>}
         {data.scans.map((s) => (
           <li key={s.id} className="border-t border-rule first:border-t-0">
-            <Link to="/scans/$scanId" params={{ scanId: s.id }} className="group grid gap-1 py-3 sm:grid-cols-[6.5rem_1fr_auto] sm:items-baseline sm:gap-4">
+            <Link to="/scans/$scanId" params={{ scanId: s.id }} className="group grid gap-1 py-4 sm:grid-cols-[6.5rem_1fr_auto] sm:items-baseline sm:gap-4">
               <span className="flex items-center gap-2 font-sans text-[12.5px] text-muted">
                 <StatusMark status={s.status} />
                 {s.status === 'running' || s.status === 'queued' ? `${s.progress}%` : timeAgo(s.finished_at ?? s.created_at)}
               </span>
               <span className="min-w-0">
-                <span className="text-[17px] group-hover:underline group-hover:decoration-1 group-hover:underline-offset-4">{s.headline ?? (s.kind === 'understand' ? `Reading of ${s.repo}` : `Review of ${s.repo}`)}</span>
-                <span className="block truncate font-sans text-[12.5px] text-muted">
+                <span className="text-[17px] leading-[1.35] group-hover:underline group-hover:decoration-1 group-hover:underline-offset-4">{s.headline ?? (s.kind === 'understand' ? `Reading of ${s.repo}` : `Review of ${s.repo}`)}</span>
+                <span className="mt-0.5 block truncate font-sans text-[12.5px] text-muted">
                   {s.repo} · {s.kind === 'understand' ? 'repository reading' : 'security brief'} · {s.trigger}
                   {s.status === 'failed' && ' · failed'}
                 </span>

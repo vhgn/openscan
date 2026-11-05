@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { Empty, ErrorNote, Lede, Margin, Page, Progress, SectionHead, Severity, StatusMark, Title, Verdict, phaseLabel, spell, timeAgo } from '#/components/ui'
-import { QuestionCard } from '#/components/QuestionCard'
+import { QuestionCard, QuestionList } from '#/components/QuestionCard'
 import { FindingFilters, applyFindingFilters, isArea, isLevel, type FindingFilterState } from '#/components/FindingFilters'
 import { getScan, updateFindingStatus } from '#/server-fns/app'
 import type { RepoProfile, ScanSummary } from '#/lib/types'
@@ -141,8 +141,8 @@ function ScanPage() {
 
           {summary.whatMatters.length > 0 && (
             <>
-              <SectionHead className="mt-14">What matters</SectionHead>
-              <ul className="mt-4 space-y-3 text-[19px] leading-[1.6]">
+              <SectionHead className="mt-16">What matters</SectionHead>
+              <ul className="mt-4 space-y-4 text-[19px] leading-[1.5]">
                 {summary.whatMatters.map((m) => (
                   <li key={m} className="grid grid-cols-[1.25rem_1fr]">
                     <span className="text-gold">—</span>
@@ -155,8 +155,8 @@ function ScanPage() {
 
           {summary.nextActions.length > 0 && (
             <>
-              <SectionHead className="mt-14">What to do next</SectionHead>
-              <ol className="mt-4 space-y-5 text-[19px] leading-[1.6]">
+              <SectionHead className="mt-16">What to do next</SectionHead>
+              <ol className="mt-4 space-y-6 text-[19px] leading-[1.5]">
                 {summary.nextActions.map((a, i) => (
                   <li key={a.action} className="relative grid grid-cols-[1.75rem_1fr]">
                     <span className="font-display text-[24px] leading-none">{i + 1}.</span>
@@ -172,9 +172,9 @@ function ScanPage() {
 
           {summary.needsValidation && summary.needsValidation.length > 0 && (
             <>
-              <SectionHead className="mt-14">Waiting on one fact from you</SectionHead>
+              <SectionHead className="mt-16">Waiting on one fact from you</SectionHead>
               <p className="mt-3 text-[17px] leading-[1.6] text-ink-3">These have no severity yet. Each depends on something only your team knows; answer below and the next scan settles it.</p>
-              <ul className="mt-4 space-y-3 text-[18px] leading-[1.55]">
+              <ul className="mt-4 space-y-4 text-[18px] leading-[1.45]">
                 {summary.needsValidation.map((n) => (
                   <li key={n.title}>
                     <span className="font-medium">{n.title}.</span> {n.missingFact && <span className="italic text-amber">{n.missingFact}</span>}
@@ -223,7 +223,7 @@ function ScanPage() {
         <>
           <SectionHead aside={openAll.length ? (filtered ? `${open.length} of ${openAll.length} open` : `${openAll.length} open`) : undefined}>Findings, in the order we would fix them</SectionHead>
           <FindingFilters items={openAll} value={filters} onChange={(v) => navigate({ search: v, replace: true, resetScroll: false })} />
-          <div className="mt-6 space-y-12">
+          <div className="mt-8 space-y-16">
             {openAll.length === 0 && !live && <Empty>No open findings. Nothing here needs your attention.</Empty>}
             {openAll.length > 0 && open.length === 0 && (
               <p className="text-[17px] italic text-muted">
@@ -245,7 +245,7 @@ function ScanPage() {
                       </>
                     )}
                   </p>
-                  <h3 className="mt-2 font-display text-[30px] leading-[1.15]">{f.title}</h3>
+                  <h3 className="mt-1.5 font-display text-[30px] leading-[1.15]">{f.title}</h3>
                   <p className="mt-1 font-sans text-[13px] text-muted">
                     {f.file && (
                       <>
@@ -258,30 +258,30 @@ function ScanPage() {
                     )}
                     <Verdict verdict={f.verdict} /> {f.confidence && <>· {f.confidence} confidence</>}
                   </p>
-                  {f.threat_model && <p className="mt-4 text-[19px] italic leading-[1.55]">{f.threat_model}</p>}
-                  <p className="mt-3 whitespace-pre-line text-[18px] leading-[1.65] text-ink-2">{f.description}</p>
+                  {f.threat_model && <p className="mt-3 text-[19px] italic leading-[1.5]">{f.threat_model}</p>}
+                  <p className="mt-3 whitespace-pre-line text-[18px] leading-[1.6] text-ink-2">{f.description}</p>
                   {trace.length > 0 && (
-                    <ol className="mt-4 space-y-1 border-l border-ink/20 pl-4 font-mono text-[12.5px] leading-relaxed text-ink-3">
+                    <ol className="mt-3 space-y-1 border-l border-ink/20 pl-4 font-mono text-[12.5px] leading-relaxed text-ink-3">
                       {trace.map((t) => (
                         <li key={t}>{t}</li>
                       ))}
                     </ol>
                   )}
                   {f.impact && (
-                    <p className="mt-4 text-[18px] leading-[1.65]">
+                    <p className="mt-3 text-[18px] leading-[1.6]">
                       <span className="italic">Impact. </span>
                       {f.impact}
                     </p>
                   )}
                   {f.recommendation && (
-                    <p className="mt-3 text-[18px] leading-[1.65]">
+                    <p className="mt-3 text-[18px] leading-[1.6]">
                       <span className="italic">The fix. </span>
                       {f.recommendation}
                     </p>
                   )}
                   {f.poc && (
                     <>
-                      <p className="label mt-5">Proof of concept</p>
+                      <p className="label mt-4">Proof of concept</p>
                       <pre className="mt-2 overflow-x-auto whitespace-pre-wrap bg-wash p-4 font-mono text-[12px] leading-relaxed text-ink-2">{f.poc}</pre>
                     </>
                   )}
@@ -293,12 +293,12 @@ function ScanPage() {
                       </Margin>
                     ) : (
                       // Long notes would run past the section in the margin; set them inline instead.
-                      <div className="mt-5 border-l border-gold pl-4 font-sans text-[13px] leading-relaxed text-muted">
+                      <div className="mt-4 border-l border-gold pl-4 font-sans text-[13px] leading-relaxed text-muted">
                         <span className="label block">Validator</span>
                         <span className="mt-1 block whitespace-pre-line">{f.verification}</span>
                       </div>
                     ))}
-                  <p className="mt-5 flex gap-4 font-sans text-[12.5px] text-muted">
+                  <p className="mt-4 flex gap-4 font-sans text-[12.5px] text-muted">
                     {(['fixed', 'dismissed'] as const).map((st) => (
                       <button
                         key={st}
@@ -321,9 +321,9 @@ function ScanPage() {
             <>
               <SectionHead>Set aside</SectionHead>
               <p className="mt-3 text-[17px] leading-[1.6] text-ink-3">Rejected by the validator, dismissed by you, or fixed. Kept so you can check the reasoning.</p>
-              <ul className="mt-4 space-y-3 text-[16px] leading-[1.55]">
+              <ul className="mt-5 divide-y divide-rule text-[16px] leading-[1.45]">
                 {closed.map((f) => (
-                  <li key={f.id}>
+                  <li key={f.id} className="py-4 first:pt-0 last:pb-0">
                     <span className="text-muted line-through decoration-ink/40">{f.title}.</span>{' '}
                     <span className="font-sans text-[12px] uppercase tracking-[0.12em] text-muted">{f.status === 'open' ? f.verdict : f.status}</span>
                     {f.verification && <span className="mt-0.5 block whitespace-pre-line text-ink-3">{f.verification}</span>}
@@ -349,11 +349,11 @@ function ScanPage() {
       {d.questions.length > 0 && (
         <>
           <SectionHead>Questions raised while reading</SectionHead>
-          <div className="mt-5 space-y-7">
+          <QuestionList className="mt-6">
             {d.questions.map((q) => (
               <QuestionCard key={q.id} q={q} />
             ))}
-          </div>
+          </QuestionList>
         </>
       )}
 
