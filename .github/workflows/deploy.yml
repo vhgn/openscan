@@ -64,7 +64,7 @@ jobs:
       # secret → copy its ID; not sensitive) to the env var it becomes. Values are
       # masked in logs. All IDs are in the Bitwarden project "OpenScan".
       - name: Load secrets from Bitwarden
-        uses: bitwarden/sm-action@v3
+        uses: bitwarden/sm-action@1238aae8fc64b212641190a9227c8a734ab1a793 # v3.0.1
         with:
           access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
           cloud_region: ${{ vars.BWS_CLOUD_REGION || 'us' }}
