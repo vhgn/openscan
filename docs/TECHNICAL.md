@@ -12,7 +12,6 @@ How to run, deploy and change openscan, and how it works inside. The short produ
 | **[PRODUCT.md](../PRODUCT.md)** | Product spec: audience, required flows, the chosen design (Essay), preferences, questions model, out of scope | You want to know what we're building and why |
 | **[SKILLS.md](../SKILLS.md)** | The agentic security skills the scanner uses (Trail of Bits, Cloudflare, Anthropic, NVIDIA, Cognition, OpenAI): which stage each runs in, how it's applied, licenses, and how to update them | You want to know *how* a scan reasons, or to change the methodology |
 | [`skills/vendor/`](../skills/vendor) | Verbatim copies of those skills, with upstream licenses and pinned commits (`SOURCES.md`) | Auditing or updating the methodology |
-| [`docs/design/`](./design) | The chosen Essay style: landing page and sample brief (also live on `/design`) | Seeing the design |
 | [`docs/screens/`](./screens) | Screenshots of landing → onboarding → brief → report → settings → product memory | Quick visual tour |
 | [`.dev.vars.example`](../.dev.vars.example) | Every secret and env var, with comments | Setting up your environment |
 
@@ -49,7 +48,7 @@ npm run dev
 
 Then open:
 
-1. **http://localhost:3000/**: the landing page (Essay style; `/design` shows the style and a sample brief).
+1. **http://localhost:3000/**: the landing page.
 2. **http://localhost:3000/api/dev/login?repos=OWASP/NodeGoat**: demo sign-in with any public repos (comma-separated). It drops you into onboarding.
 3. Select the repo, then either **Login with ChatGPT** (real AI) or **Skip** (deterministic heuristic engine), answer the preference questions, wait for reading, and land on the dashboard.
 
@@ -248,7 +247,9 @@ sequenceDiagram
 
 ### Products and unified memory (`src/lib/products.ts`)
 
-A **product** is a named group of repositories (for example `api` + `web` + `infra`). Each repo belongs to one product per user. Onboarding creates the first product. More can be created on `/products/new`, and **Scan product** scans every repo in it as one run (`scans.run_id`). Questions and answers are shared across the product, so the AI never asks the same thing per repo.
+A **product** is a named group of repositories (for example `api` + `web` + `infra`). Each repo belongs to one product per user. Onboarding creates the first product. More can be created on `/products/new`. Questions and answers are shared across the product, so the AI never asks the same thing per repo.
+
+**Products own scans.** A review is a **product scan** (table `product_scans`), and it owns one repository scan per member repo (`scans.product_scan_id`). The brief's *Run a fresh review of …* picker lists products, scheduled reports run once per product, and the onboarding report is the product's first review. Each member repo has a **scan on push** switch (`product_repositories.scan_on_push`, on the product page): a push to its default branch starts a product scan with a differential review of only that repo; its siblings reach the agents through product memory. Choosing *On every push* in preferences turns the switch on for every repo, and moving away from it turns them all off. `POST /api/scans {productId}` reviews a product; `{repoId}` reviews one repo inside its product.
 
 Every product has one **memory** (table `memory`), so agents don't re-check the same things:
 
@@ -454,6 +455,8 @@ erDiagram
     PRODUCTS ||--o{ PRODUCT_REPOSITORIES : "groups"
     REPOSITORIES ||--o{ PRODUCT_REPOSITORIES : "member of"
     PRODUCTS ||--o{ MEMORY : "remembers"
+    PRODUCTS ||--o{ PRODUCT_SCANS : "owns"
+    PRODUCT_SCANS ||--o{ SCANS : "runs one per repo"
     USERS ||--o{ SCANS : "runs"
     REPOSITORIES ||--o{ SCANS : "scanned by"
     PRODUCTS |o--o{ SCANS : "scoped to"
@@ -518,6 +521,15 @@ erDiagram
     PRODUCT_REPOSITORIES {
         TEXT product_id PK
         INTEGER repo_id PK
+        INTEGER scan_on_push "a push starts a product scan"
+    }
+    PRODUCT_SCANS {
+        TEXT id PK
+        TEXT product_id FK
+        TEXT user_id FK
+        TEXT trigger "onboarding, manual, schedule, push"
+        INTEGER push_repo_id "push: the repo pushed"
+        TEXT commit_sha "push: head commit"
     }
     MEMORY {
         TEXT id PK
@@ -541,7 +553,7 @@ erDiagram
         TEXT summary_json
         TEXT codex_tasks_json
         TEXT product_id
-        TEXT run_id "groups a product scan"
+        TEXT product_scan_id "the product scan that owns it"
         INTEGER attempts
         TEXT lease_id "worker running the current step"
         INTEGER lease_until
@@ -587,9 +599,9 @@ erDiagram
     }
 ```
 
-`scans.product_id` and `questions.product_id` were added by `ALTER TABLE` without a foreign key; the link to `products` is kept in app code. `lwc_store` and `app_settings` stand alone.
+`scans.product_id`, `scans.product_scan_id` and `questions.product_id` were added by `ALTER TABLE` without a foreign key; the link to `products` is kept in app code. `lwc_store` and `app_settings` stand alone.
 
-`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` · `memory` · `preferences` · `scans` (status/phase/progress/state/summary/skills/Codex tasks/product/run) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
+`users` · `sessions` · `installations` · `user_installations` · `repositories` (+ `profile_json`) · `user_repositories` (`selected`, Codex environment) · `products` · `product_repositories` (`scan_on_push`) · `product_scans` (one review of a product: trigger, pushed repo and commit) · `memory` · `preferences` · `scans` (one repository job: status/phase/progress/state/summary/skills/Codex tasks/product/product scan) · `scan_events` (activity log) · `findings` (severity, priority, PoC, fingerprint, verdict, trace, threat model, source, skills) · `questions` (open / auto_answered / answered) · `lwc_store` (ChatGPT SDK sessions) · `app_settings` (unused since the design was chosen; kept for future settings).
 
 ### Identity, tokens and secrets
 

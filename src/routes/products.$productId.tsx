@@ -1,6 +1,7 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Empty, Lede, Margin, Page, SectionHead, Squiggle, plural, timeAgo } from '#/components/ui'
+import { ProductScans, isLive } from '#/components/ProductScans'
 import { deleteProductFn, forgetMemoryFn, getProductPage, saveProductFn, scanProduct } from '#/server-fns/app'
 
 export const Route = createFileRoute('/products/$productId')({
@@ -21,6 +22,14 @@ function ProductPage() {
   const router = useRouter()
   const [name, setName] = useState(d.product?.name ?? '')
   const [members, setMembers] = useState<number[]>(d.repos.filter((r) => r.member).map((r) => r.id))
+  const [onPush, setOnPush] = useState<number[]>(d.repos.filter((r) => r.scanOnPush).map((r) => r.id))
+  const [error, setError] = useState<string | null>(null)
+  const live = d.productScans.some(isLive)
+  useEffect(() => {
+    if (!live) return
+    const t = setInterval(() => router.invalidate(), 3000)
+    return () => clearInterval(t)
+  }, [live, router])
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<keyof typeof KIND_LABEL>('fact')
   const rows = d.memory.filter((m) => m.kind === tab)
@@ -28,7 +37,9 @@ function ProductPage() {
   const save = async () => {
     setBusy(true)
     try {
-      const { id } = await saveProductFn({ data: { id: d.product?.id, name: name.trim() || 'Untitled product', repoIds: members } })
+      const { id } = await saveProductFn({
+        data: { id: d.product?.id, name: name.trim() || 'Untitled product', repoIds: members, pushRepoIds: onPush.filter((r) => members.includes(r)) },
+      })
       if (!d.product) await router.navigate({ to: '/products/$productId', params: { productId: id } })
       else await router.invalidate()
     } finally {
@@ -46,7 +57,10 @@ function ProductPage() {
         placeholder="Name this product"
         aria-label="Product name"
       />
-      <Lede>Repositories in a product are reviewed together. Agents see each other&rsquo;s profiles, share your answers, and skip code that was already reviewed.</Lede>
+      <Lede>
+        A product owns its reviews: each one scans its repositories together, so agents see each other&rsquo;s profiles, share your answers, and skip code that was already reviewed.
+        A push to a repository marked <em>on push</em> starts a review of that repository inside the product.
+      </Lede>
 
       <SectionHead aside={`${members.length} selected`} hint="A repository belongs to one product at a time. Picking one that is in another product moves it here.">Repositories</SectionHead>
       {/* Fixed height, scrolls inside; repos that were already in the product when the page opened come first. */}
@@ -54,16 +68,31 @@ function ProductPage() {
         {d.repos.length === 0 && <Empty>No repositories linked yet.</Empty>}
         {[...d.repos].sort((a, b) => Number(b.member) - Number(a.member)).map((r) => (
           <li key={r.id} className="border-t border-rule first:border-t-0">
-            <label className="grid cursor-pointer grid-cols-[1.75rem_1fr_auto] items-baseline py-2.5">
-              <input
-                type="checkbox"
-                className="h-3.5 w-3.5"
-                checked={members.includes(r.id)}
-                onChange={() => setMembers((m) => (m.includes(r.id) ? m.filter((x) => x !== r.id) : [...m, r.id]))}
-              />
-              <span className="text-[17px]">{r.fullName}</span>
-              {r.otherProduct && !members.includes(r.id) && <span className="font-sans text-[12px] text-muted">in {r.otherProduct}; will move</span>}
-            </label>
+            <div className="grid grid-cols-[1fr_auto] items-baseline gap-4 py-2.5">
+              <label className="grid cursor-pointer grid-cols-[1.75rem_1fr] items-baseline">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5"
+                  checked={members.includes(r.id)}
+                  onChange={() => setMembers((m) => (m.includes(r.id) ? m.filter((x) => x !== r.id) : [...m, r.id]))}
+                />
+                <span className="min-w-0 text-[17px]">
+                  {r.fullName}
+                  {r.otherProduct && !members.includes(r.id) && <span className="ml-2 font-sans text-[12px] text-muted">in {r.otherProduct}; will move</span>}
+                </span>
+              </label>
+              {members.includes(r.id) && (
+                <label className="flex cursor-pointer items-center gap-2 font-sans text-[12.5px] text-muted" title="A push to the default branch starts a review of this repository in the product">
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3"
+                    checked={onPush.includes(r.id)}
+                    onChange={() => setOnPush((m) => (m.includes(r.id) ? m.filter((x) => x !== r.id) : [...m, r.id]))}
+                  />
+                  on push
+                </label>
+              )}
+            </div>
           </li>
         ))}
       </ul>
@@ -75,14 +104,21 @@ function ProductPage() {
           <>
             <button
               className="btn btn-quiet"
-              disabled={busy || members.length === 0}
+              disabled={busy || d.repos.every((r) => !r.member)}
               onClick={async () => {
                 setBusy(true)
-                await scanProduct({ data: { productId: d.product!.id } })
-                await router.navigate({ to: '/home' })
+                setError(null)
+                try {
+                  await scanProduct({ data: { productId: d.product!.id } })
+                  await router.invalidate()
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e))
+                } finally {
+                  setBusy(false)
+                }
               }}
             >
-              Review all {members.length}
+              Review {d.product.name}
             </button>
             <button
               className="ml-2 font-sans text-[12.5px] text-muted underline underline-offset-4 hover:text-alarm"
@@ -98,8 +134,13 @@ function ProductPage() {
         )}
       </div>
 
+      {error && <p className="mt-3 font-sans text-[13px] text-alarm">{error}</p>}
+
       {d.product && (
         <>
+          <SectionHead aside={live ? 'In progress' : undefined} hint="Each review scans this product’s repositories together. A push to a repository marked on push reviews just that repository.">Reviews</SectionHead>
+          <ProductScans items={d.productScans} showProduct={false} empty="No reviews of this product yet." />
+
           <SectionHead hint="What this product’s agents remember so they don’t re-check the same things: facts and your answers, files already reviewed at the same version, and earlier verdicts on the same code.">Memory</SectionHead>
           <div className="relative mt-4 text-[19px] leading-[1.65] text-ink-2">
             This product remembers {plural(d.stats.facts, 'fact')}, {plural(d.stats.reviewed, 'reviewed file')} and {plural(d.stats.verdicts, 'verdict')}

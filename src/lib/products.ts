@@ -38,8 +38,9 @@ export interface MemoryRow {
 // ---------------------------------------------------------------- products
 
 export function listProducts(userId: string) {
-  return all<ProductRow & { repos: number }>(
-    `SELECT p.*, (SELECT COUNT(*) FROM product_repositories pr WHERE pr.product_id = p.id) AS repos
+  return all<ProductRow & { repos: number; push_repos: number }>(
+    `SELECT p.*, (SELECT COUNT(*) FROM product_repositories pr WHERE pr.product_id = p.id) AS repos,
+       (SELECT COUNT(*) FROM product_repositories pr WHERE pr.product_id = p.id AND pr.scan_on_push = 1) AS push_repos
      FROM products p WHERE p.user_id = ? ORDER BY p.created_at`,
     userId,
   )
@@ -61,9 +62,39 @@ export function productRepoIds(productId: string) {
   return all<{ repo_id: number }>('SELECT repo_id FROM product_repositories WHERE product_id = ?', productId).then((r) => r.map((x) => x.repo_id))
 }
 
-/** Creates or updates a product and makes it the only product owning these repos for this user. */
-export async function saveProduct(userId: string, input: { id?: string; name: string; description?: string | null; repoIds: number[] }): Promise<string> {
+/** Member repos whose pushes start a product scan. */
+export function productPushRepoIds(productId: string) {
+  return all<{ repo_id: number }>('SELECT repo_id FROM product_repositories WHERE product_id = ? AND scan_on_push = 1', productId).then((r) => r.map((x) => x.repo_id))
+}
+
+/** New member repos scan on push when the user chose "on every push". */
+async function pushByDefault(userId: string): Promise<boolean> {
+  const row = await first<{ f: string | null }>(`SELECT json_extract(json, '$.frequency') AS f FROM preferences WHERE user_id = ?`, userId)
+  return row?.f === 'on_push'
+}
+
+/** Turns push scans on or off for every repo in the user's products (preferences changed to or from "on every push"). */
+export async function setPushForAllProducts(userId: string, on: boolean) {
+  await run('UPDATE product_repositories SET scan_on_push = ? WHERE product_id IN (SELECT id FROM products WHERE user_id = ?)', on ? 1 : 0, userId)
+}
+
+/**
+ * Creates or updates a product and makes it the only product owning these repos for this user.
+ * `pushRepoIds` lists the members whose pushes start a product scan; when omitted, existing
+ * members keep their setting and new ones follow the user's frequency preference.
+ */
+export async function saveProduct(
+  userId: string,
+  input: { id?: string; name: string; description?: string | null; repoIds: number[]; pushRepoIds?: number[] },
+): Promise<string> {
   const id = input.id ?? uid()
+  let push = input.pushRepoIds
+  if (!push) {
+    const keep = new Set(input.id ? await productPushRepoIds(id) : [])
+    const known = new Set(input.id ? await productRepoIds(id) : [])
+    const dflt = await pushByDefault(userId)
+    push = input.repoIds.filter((r) => keep.has(r) || (!known.has(r) && dflt))
+  }
   const ops: Array<[string, Array<string | number | null>]> = []
   if (input.id) {
     ops.push(['UPDATE products SET name = ?, description = ?, updated_at = ? WHERE id = ? AND user_id = ?', [input.name, input.description ?? null, now(), id, userId]])
@@ -77,7 +108,7 @@ export async function saveProduct(userId: string, input: { id?: string; name: st
       'DELETE FROM product_repositories WHERE repo_id = ? AND product_id IN (SELECT id FROM products WHERE user_id = ? AND id <> ?)',
       [repoId, userId, id],
     ])
-    ops.push(['INSERT OR IGNORE INTO product_repositories (product_id, repo_id) VALUES (?, ?)', [id, repoId]])
+    ops.push(['INSERT OR IGNORE INTO product_repositories (product_id, repo_id, scan_on_push) VALUES (?, ?, ?)', [id, repoId, push.includes(repoId) ? 1 : 0]])
   }
   await batch(ops)
   // Questions follow their repo into the product so answers are shared.

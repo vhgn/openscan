@@ -1,13 +1,24 @@
 /** Write actions shared by the UI (server functions) and the REST API. */
 import { first, now, run } from './db'
 import { productForRepo, rememberFacts } from './products'
-import { createScan } from './scanner/engine'
+import { createScan, productIdForRepo, startProductScan } from './scanner/engine'
 import type { ScanKind } from './types'
 
+/**
+ * Starts a scan of one linked repository and returns the repository scan id. A security scan
+ * runs inside its product (a product scan covering just this repo); a reading stands alone.
+ */
 export async function startScanFor(userId: string, repoId: number, kind: ScanKind = 'security'): Promise<string | null> {
-  const link = await first('SELECT 1 FROM user_repositories WHERE user_id = ? AND repo_id = ?', userId, repoId)
+  const link = await first<{ full_name: string }>(
+    'SELECT r.full_name FROM user_repositories ur JOIN repositories r ON r.id = ur.repo_id WHERE ur.user_id = ? AND ur.repo_id = ?',
+    userId,
+    repoId,
+  )
   if (!link) return null
-  return createScan(userId, repoId, kind, 'manual')
+  if (kind === 'understand') return createScan(userId, repoId, 'understand', 'manual')
+  const productId = await productIdForRepo(userId, repoId, link.full_name.split('/')[0])
+  const started = await startProductScan(userId, productId, 'manual', { repoIds: [repoId] })
+  return started?.scanIds[0] ?? null
 }
 
 /** Records the owner's answer and turns it into product memory every agent sees. Returns false if not found. */

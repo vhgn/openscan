@@ -72,6 +72,14 @@ function ScanPage() {
     <Page user={d.user} crumb={s.repo}>
       <p className="label">
         {s.kind === 'understand' ? 'Repository reading' : 'Security brief'} · {s.repo} · {s.trigger}
+        {s.product_id && s.product && (
+          <>
+            {' · '}
+            <Link to="/products/$productId" params={{ productId: s.product_id }} className="link">
+              {s.product}
+            </Link>
+          </>
+        )}
       </p>
       <p className="mt-2 font-sans text-[13px] text-muted">
         {date}

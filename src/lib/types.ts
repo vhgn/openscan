@@ -78,6 +78,10 @@ export interface ScanRow {
   updated_at: number
   started_at: number | null
   finished_at: number | null
+  /** Product that owned the repo when the scan was queued. */
+  product_id: string | null
+  /** The product scan (one review of a product) this repository scan belongs to. */
+  product_scan_id: string | null
   /** Step lease (src/lib/scanner/lease.ts): who is running a step and until when. */
   lease_id: string | null
   lease_until: number | null

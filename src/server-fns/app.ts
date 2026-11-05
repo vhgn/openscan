@@ -8,8 +8,8 @@ import { currentUser, requireUser } from '#/lib/session'
 import { installUrl, manageInstallationUrl, githubConfigured } from '#/lib/github/app'
 import { listInstallTargets, listUserRepos, syncUserRepos } from '#/lib/github/repos'
 import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
-import { createScan, loadPreferences } from '#/lib/scanner/engine'
-import { listFindings, listQuestions, listScans, scanDetail } from '#/lib/queries'
+import { createScan, loadPreferences, productIdForRepo, startProductScan } from '#/lib/scanner/engine'
+import { listFindings, listProductScans, listQuestions, scanDetail } from '#/lib/queries'
 import { codexClientFor, codexEnvironmentFor, openscanHost, settleInternetProbes, startInternetProbe } from '#/lib/codex/runtime'
 import { environmentsSettingsUrl } from '#/lib/codex/cloud'
 import {
@@ -20,11 +20,12 @@ import {
   listMemory,
   listProducts,
   memoryStats,
+  productPushRepoIds,
   productRepoIds,
   saveProduct,
+  setPushForAllProducts,
 } from '#/lib/products'
-import { uid } from '#/lib/db'
-import { answerQuestionFor, setFindingStatus, startScanFor } from '#/lib/actions'
+import { answerQuestionFor, setFindingStatus } from '#/lib/actions'
 import { isDemoLoginEnabled } from '#/lib/env'
 import { preferencesSchema, type OnboardingStep, type UserRow } from '#/lib/types'
 
@@ -165,6 +166,7 @@ export const savePreferences = createServerFn({ method: 'POST' })
   .validator(preferencesSchema)
   .handler(async ({ data }) => {
     const user = await requireUser()
+    const before = await loadPreferences(user.id)
     await run(
       `INSERT INTO preferences (user_id, json, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(user_id) DO UPDATE SET json = excluded.json, updated_at = excluded.updated_at`,
@@ -172,14 +174,23 @@ export const savePreferences = createServerFn({ method: 'POST' })
       JSON.stringify(data),
       now(),
     )
+    // "On every push" is the default for every repo; product pages can still turn single repos on or off.
+    if (data.frequency !== before.frequency && (data.frequency === 'on_push' || before.frequency === 'on_push')) {
+      await setPushForAllProducts(user.id, data.frequency === 'on_push')
+    }
     if (!user.onboarded_at) {
       await run('UPDATE users SET onboarded_at = ?, onboarding_step = ?, updated_at = ? WHERE id = ?', now(), 'waiting', now(), user.id)
-      // Repos already understood get their first report immediately; the rest chain when reading finishes.
-      const understood = await all<{ id: number }>(
-        `SELECT r.id FROM repositories r JOIN user_repositories ur ON ur.repo_id = r.id WHERE ur.user_id = ? AND ur.selected = 1 AND r.understood_at IS NOT NULL`,
+      // Each product's first review starts with the repos already understood; the rest join it when reading finishes.
+      const understood = await all<{ id: number; full_name: string }>(
+        `SELECT r.id, r.full_name FROM repositories r JOIN user_repositories ur ON ur.repo_id = r.id WHERE ur.user_id = ? AND ur.selected = 1 AND r.understood_at IS NOT NULL`,
         user.id,
       )
-      for (const r of understood) await createScan(user.id, r.id, 'security', 'onboarding')
+      const byProduct = new Map<string, number[]>()
+      for (const r of understood) {
+        const pid = await productIdForRepo(user.id, r.id, r.full_name.split('/')[0])
+        byProduct.set(pid, [...(byProduct.get(pid) ?? []), r.id])
+      }
+      for (const [pid, repoIds] of byProduct) await startProductScan(user.id, pid, 'onboarding', { repoIds })
     }
     return { ok: true }
   })
@@ -217,9 +228,9 @@ async function dashboardData(user: UserRow) {
     repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at) })),
     codexEnvironmentsUrl: environmentsSettingsUrl(),
     products: await Promise.all(
-      (await listProducts(user.id)).map(async (p) => ({ id: p.id, name: p.name, repos: p.repos, memory: await memoryStats(p.id) })),
+      (await listProducts(user.id)).map(async (p) => ({ id: p.id, name: p.name, repos: p.repos, pushRepos: p.push_repos, memory: await memoryStats(p.id) })),
     ),
-    scans: await listScans(user.id, 30),
+    productScans: await listProductScans(user.id, { limit: 20 }),
     findings: await listFindings(user.id, { limit: 50 }),
     questions: await listQuestions(user.id, ['open']),
     preferences: await loadPreferences(user.id),
@@ -246,15 +257,6 @@ export const getScan = createServerFn({ method: 'GET' })
     const detail = await scanDetail(user.id, data.id)
     if (!detail) throw redirect({ to: '/home' })
     return { ...detail, user: publicUser(user) }
-  })
-
-export const startScan = createServerFn({ method: 'POST' })
-  .validator(z.object({ repoId: z.number().int(), kind: z.enum(['understand', 'security']).default('security') }))
-  .handler(async ({ data }) => {
-    const user = await requireUser()
-    const id = await startScanFor(user.id, data.repoId, data.kind)
-    if (!id) throw new Error('Repository not linked')
-    return { id }
   })
 
 export const updateFindingStatus = createServerFn({ method: 'POST' })
@@ -295,16 +297,16 @@ export const checkCodexInternet = createServerFn({ method: 'POST' }).handler(asy
 
 // ------------------------------------------------------------------ products & memory
 
+/** Starts a security review of a whole product (one product scan, one repository scan per member). */
 export const scanProduct = createServerFn({ method: 'POST' })
   .validator(z.object({ productId: z.string() }))
   .handler(async ({ data }) => {
     const user = await requireUser()
     const product = await getProduct(user.id, data.productId)
     if (!product) throw new Error('Product not found')
-    const runId = uid()
-    const ids: string[] = []
-    for (const repoId of await productRepoIds(product.id)) ids.push(await createScan(user.id, repoId, 'security', 'manual', {}, runId))
-    return { runId, scanIds: ids }
+    const started = await startProductScan(user.id, product.id, 'manual')
+    if (!started) throw new Error('This product has no repositories yet')
+    return { productId: product.id, productScanId: started.id, scanIds: started.scanIds }
   })
 
 export const getProductPage = createServerFn({ method: 'GET' })
@@ -315,6 +317,8 @@ export const getProductPage = createServerFn({ method: 'GET' })
     const product = isNew ? null : await getProduct(user.id, data.id)
     if (!isNew && !product) throw redirect({ to: '/home' })
     const members = product ? await productRepoIds(product.id) : []
+    const pushMembers = product ? await productPushRepoIds(product.id) : []
+    const prefs = await loadPreferences(user.id)
     const repos = await listUserRepos(user.id)
     const owners = new Map<number, string>()
     for (const p of await listProducts(user.id)) for (const r of await productRepoIds(p.id)) owners.set(r, p.name)
@@ -322,7 +326,15 @@ export const getProductPage = createServerFn({ method: 'GET' })
     return {
       user: publicUser(user),
       product: product ? { id: product.id, name: product.name, description: product.description } : null,
-      repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, member: members.includes(r.id), otherProduct: members.includes(r.id) ? null : (owners.get(r.id) ?? null) })),
+      repos: repos.map((r) => ({
+        id: r.id,
+        fullName: r.full_name,
+        member: members.includes(r.id),
+        // Non-members show the default they would get on joining.
+        scanOnPush: members.includes(r.id) ? pushMembers.includes(r.id) : prefs.frequency === 'on_push',
+        otherProduct: members.includes(r.id) ? null : (owners.get(r.id) ?? null),
+      })),
+      productScans: product ? await listProductScans(user.id, { productId: product.id, limit: 15 }) : [],
       stats: product ? await memoryStats(product.id) : { facts: 0, reviewed: 0, verdicts: 0, saved: 0 },
       memory: memory.map((m) => ({ id: m.id, kind: m.kind, repo: repos.find((r) => r.id === m.repo_id)?.full_name ?? null, key: m.key, content: m.content, evidence: m.evidence, hits: m.hits, updatedAt: m.updated_at })),
     }
@@ -330,7 +342,16 @@ export const getProductPage = createServerFn({ method: 'GET' })
 export type ProductPageData = Awaited<ReturnType<typeof getProductPage>>
 
 export const saveProductFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ id: z.string().optional(), name: z.string().trim().min(1).max(80), description: z.string().max(500).optional(), repoIds: z.array(z.number().int()).max(100) }))
+  .validator(
+    z.object({
+      id: z.string().optional(),
+      name: z.string().trim().min(1).max(80),
+      description: z.string().max(500).optional(),
+      repoIds: z.array(z.number().int()).max(100),
+      /** Members whose pushes start a product scan; omitted keeps current settings. */
+      pushRepoIds: z.array(z.number().int()).max(100).optional(),
+    }),
+  )
   .handler(async ({ data }) => {
     const user = await requireUser()
     if (data.id && !(await getProduct(user.id, data.id))) throw new Error('Product not found')
@@ -338,7 +359,8 @@ export const saveProductFn = createServerFn({ method: 'POST' })
     const repoIds = data.repoIds.filter((id) => linked.includes(id))
     // Repos in a product are scanned, so make sure they are selected.
     for (const id of repoIds) await run('UPDATE user_repositories SET selected = 1 WHERE user_id = ? AND repo_id = ?', user.id, id)
-    return { id: await saveProduct(user.id, { id: data.id, name: data.name, description: data.description ?? null, repoIds }) }
+    const pushRepoIds = data.pushRepoIds?.filter((id) => repoIds.includes(id))
+    return { id: await saveProduct(user.id, { id: data.id, name: data.name, description: data.description ?? null, repoIds, pushRepoIds }) }
   })
 
 export const deleteProductFn = createServerFn({ method: 'POST' })

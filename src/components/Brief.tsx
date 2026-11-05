@@ -1,10 +1,11 @@
 import { Link, useRouter } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
-import { Empty, Lede, Margin, Page, SectionHead, Severity, StatusMark, Title, plural, spell, timeAgo } from '#/components/ui'
+import { Empty, Lede, Margin, Page, SectionHead, Severity, StatusMark, Title, plural, spell } from '#/components/ui'
 import { QuestionCard, QuestionList } from '#/components/QuestionCard'
 import { Select } from '#/components/Select'
 import { FindingFilters, applyFindingFilters, type FindingFilterState } from '#/components/FindingFilters'
-import { scanProduct, startScan, type DashboardData } from '#/server-fns/app'
+import { ProductScans, isLive } from '#/components/ProductScans'
+import { scanProduct, type DashboardData } from '#/server-fns/app'
 
 
 const SEV_ORDER = ['critical', 'high', 'medium', 'low', 'info']
@@ -31,13 +32,14 @@ function headline(n: number, urgent: number, open: number) {
 /** The signed-in brief, shown on /home once setup is done. */
 export function Brief({ data }: { data: DashboardData }) {
   const router = useRouter()
-  const running = data.scans.filter((s) => s.status === 'queued' || s.status === 'running')
+  const running = data.productScans.filter(isLive)
   useEffect(() => {
     if (!running.length) return
     const t = setInterval(() => router.invalidate(), 4000)
     return () => clearInterval(t)
   }, [running.length, router])
-  const [repoId, setRepoId] = useState<number | undefined>(data.repos[0]?.id)
+  const [productId, setProductId] = useState<string | undefined>((data.products.find((p) => p.repos > 0) ?? data.products[0])?.id)
+  const product = data.products.find((p) => p.id === productId)
   const [busy, setBusy] = useState<string | null>(null)
   const minIdx = SEV_ORDER.indexOf(data.preferences.minSeverity)
   const visible = data.findings.filter((f) => SEV_ORDER.indexOf(f.severity) <= minIdx)
@@ -74,11 +76,11 @@ export function Brief({ data }: { data: DashboardData }) {
       {running.length > 0 && (
         <p className="mt-6 flex items-center gap-2 font-sans text-[13px] text-muted">
           <StatusMark status="running" /> {running.length === 1 ? 'A review is' : `${running.length} reviews are`} in progress:{' '}
-          {running.map((s, i) => (
-            <span key={s.id}>
+          {running.map((ps, i) => (
+            <span key={ps.id}>
               {i > 0 && ', '}
-              <Link to="/scans/$scanId" params={{ scanId: s.id }} className="link text-ink-3">
-                {s.repo} ({s.progress}%)
+              <Link to="/products/$productId" params={{ productId: ps.product_id }} className="link text-ink-3">
+                {ps.product} ({ps.progress}%)
               </Link>
             </span>
           ))}
@@ -89,19 +91,34 @@ export function Brief({ data }: { data: DashboardData }) {
         className="mt-8 flex flex-wrap items-end gap-3 font-sans text-[14px]"
         onSubmit={async (e) => {
           e.preventDefault()
-          if (!repoId) return
+          if (!product) return
           setBusy('scan')
           try {
-            const { id } = await startScan({ data: { repoId, kind: 'security' } })
-            await router.navigate({ to: '/scans/$scanId', params: { scanId: id } })
+            const { scanIds } = await scanProduct({ data: { productId: product.id } })
+            // One repository: straight to its brief. Several: the product page follows them all.
+            if (scanIds.length === 1) await router.navigate({ to: '/scans/$scanId', params: { scanId: scanIds[0] } })
+            else await router.navigate({ to: '/products/$productId', params: { productId: product.id } })
           } finally {
             setBusy(null)
           }
         }}
       >
         <span className="pb-1.5 text-muted">Run a fresh review of</span>
-        <Select size="sans" className="max-w-[18rem] pb-1" label="Repository" value={repoId ?? 0} onChange={(v) => setRepoId(v)} options={data.repos.map((r) => ({ value: r.id, label: r.fullName }))} />
-        <button className="btn btn-sm" disabled={!repoId || busy !== null}>
+        {data.products.length > 0 ? (
+          <Select
+            size="sans"
+            className="max-w-[18rem] pb-1"
+            label="Product"
+            value={productId ?? ''}
+            onChange={(v) => setProductId(v)}
+            options={data.products.map((p) => ({ value: p.id, label: p.name, hint: plural(p.repos, 'repo') }))}
+          />
+        ) : (
+          <Link to="/products/$productId" params={{ productId: 'new' }} className="link pb-1.5">
+            a new product
+          </Link>
+        )}
+        <button className="btn btn-sm" disabled={!product || product.repos === 0 || busy !== null}>
           {busy === 'scan' ? 'Starting…' : 'Start'}
         </button>
       </form>
@@ -165,51 +182,17 @@ export function Brief({ data }: { data: DashboardData }) {
               {p.name}
             </Link>
             <p className="mt-1 text-[17px] leading-[1.45] text-ink-3">
-              {plural(p.repos, 'repository', 'repositories')}. Its memory holds {plural(p.memory.facts, 'fact')}, {plural(p.memory.reviewed, 'reviewed file')} and{' '}
-              {plural(p.memory.verdicts, 'verdict')}.
+              {plural(p.repos, 'repository', 'repositories')}
+              {p.repos > 0 && (p.pushRepos === 0 ? ', none reviewed on push' : p.pushRepos === p.repos ? ', each reviewed on push' : `, ${p.pushRepos} reviewed on push`)}. Its memory holds{' '}
+              {plural(p.memory.facts, 'fact')}, {plural(p.memory.reviewed, 'reviewed file')} and {plural(p.memory.verdicts, 'verdict')}.
             </p>
-            <button
-              className="btn btn-quiet btn-sm mt-2.5"
-              disabled={busy !== null || p.repos === 0}
-              onClick={async () => {
-                setBusy(p.id)
-                try {
-                  await scanProduct({ data: { productId: p.id } })
-                  await router.invalidate()
-                } finally {
-                  setBusy(null)
-                }
-              }}
-            >
-              {busy === p.id ? 'Queuing…' : `Review all ${p.repos}`}
-            </button>
             {p.memory.saved > 0 && <Margin>Memory has saved {plural(p.memory.saved, 're-check')} so far.</Margin>}
           </div>
         ))}
       </div>
 
-      <SectionHead hint="Every review run, newest first, including ones still in progress. Open one to see its full report.">Earlier briefs</SectionHead>
-      <ol className="mt-4">
-        {data.scans.length === 0 && <Empty>No scans yet.</Empty>}
-        {data.scans.map((s) => (
-          <li key={s.id}>
-            <Link to="/scans/$scanId" params={{ scanId: s.id }} className="group grid gap-1 py-3.5 sm:grid-cols-[6.5rem_1fr_auto] sm:items-baseline sm:gap-4">
-              <span className="flex items-center gap-2 font-sans text-[12.5px] text-muted">
-                <StatusMark status={s.status} />
-                {s.status === 'running' || s.status === 'queued' ? `${s.progress}%` : timeAgo(s.finished_at ?? s.created_at)}
-              </span>
-              <span className="min-w-0">
-                <span className="text-[17px] leading-[1.35] group-hover:underline group-hover:decoration-1 group-hover:underline-offset-4">{s.headline ?? (s.kind === 'understand' ? `Reading of ${s.repo}` : `Review of ${s.repo}`)}</span>
-                <span className="mt-0.5 block truncate font-sans text-[12.5px] text-muted">
-                  {s.repo} · {s.kind === 'understand' ? 'repository reading' : 'security brief'} · {s.trigger}
-                  {s.status === 'failed' && ' · failed'}
-                </span>
-              </span>
-              {s.risk && s.kind === 'security' ? <Severity severity={s.risk} /> : <span />}
-            </Link>
-          </li>
-        ))}
-      </ol>
+      <SectionHead hint="One review per product: each runs a brief per repository. Newest first, including reviews still in progress.">Earlier reviews</SectionHead>
+      <ProductScans items={data.productScans} empty="No reviews yet." />
     </Page>
   )
 }

@@ -49,6 +49,7 @@ import {
   memoryHit,
   priorVerdict,
   productForRepo,
+  productRepoIds,
   rememberFacts,
   rememberReviewed,
   rememberVerdict,
@@ -77,7 +78,7 @@ const BATCH_CHARS = 45_000
 const BATCH_FILES = 6
 const MAX_ATTEMPTS = 3
 
-interface ScanState {
+export interface ScanState {
   sha?: string
   overview?: string
   files?: string[]
@@ -111,7 +112,18 @@ interface ScanState {
 
 // ---------------------------------------------------------------- public API
 
-export async function createScan(userId: string, repoId: number, kind: ScanKind, trigger: string, initialState: Partial<ScanState> = {}, runId: string | null = null): Promise<string> {
+/**
+ * Queues one repository job. Security scans belong to a product scan (see `startProductScan`);
+ * `understand` scans (reading a repo) stand alone. A repo already being scanned keeps its running job.
+ */
+export async function createScan(
+  userId: string,
+  repoId: number,
+  kind: ScanKind,
+  trigger: string,
+  initialState: Partial<ScanState> = {},
+  productScanId: string | null = null,
+): Promise<string> {
   const active = await first<{ id: string }>(
     `SELECT id FROM scans WHERE user_id = ? AND repo_id = ? AND kind = ? AND status IN ('queued','running')`,
     userId,
@@ -121,7 +133,7 @@ export async function createScan(userId: string, repoId: number, kind: ScanKind,
   if (active) return active.id
   const id = uid()
   await run(
-    `INSERT INTO scans (id, user_id, repo_id, kind, trigger, status, phase, progress, state_json, created_at, updated_at, product_id, run_id)
+    `INSERT INTO scans (id, user_id, repo_id, kind, trigger, status, phase, progress, state_json, created_at, updated_at, product_id, product_scan_id)
      VALUES (?, ?, ?, ?, ?, 'queued', 'queued', 0, ?, ?, ?, ?, ?)`,
     id,
     userId,
@@ -132,11 +144,65 @@ export async function createScan(userId: string, repoId: number, kind: ScanKind,
     now(),
     now(),
     (await productForRepo(userId, repoId))?.id ?? null,
-    runId,
+    productScanId,
   )
   await logEvent(id, kind === 'understand' ? 'Queued: AI will read the repository' : `Queued security scan (${trigger})`)
   await enqueue(id)
   return id
+}
+
+/**
+ * Starts a security review of a product: one product scan that owns a repository scan per
+ * member repo (or only `repoIds`, e.g. the repo that was pushed). Repos already being scanned
+ * keep their running scan. Returns the new product scan (or the running one when nothing new
+ * started, `id: null` if that scan predates product scans), or null when the product has no such repos.
+ */
+export async function startProductScan(
+  userId: string,
+  productId: string,
+  trigger: string,
+  opts: { repoIds?: number[]; state?: Partial<ScanState>; push?: { repoId: number; commitSha: string | null } } = {},
+): Promise<{ id: string | null; scanIds: string[] } | null> {
+  // Only repos the user still has through the GitHub App (detached repos keep their history but aren't scanned).
+  const linked = new Set(
+    (
+      await all<{ repo_id: number }>(
+        `SELECT ur.repo_id FROM user_repositories ur JOIN repositories r ON r.id = ur.repo_id
+         WHERE ur.user_id = ? AND r.removed_at IS NULL`,
+        userId,
+      )
+    ).map((r) => r.repo_id),
+  )
+  const members = (await productRepoIds(productId)).filter((r) => linked.has(r))
+  const repoIds = opts.repoIds ? opts.repoIds.filter((r) => members.includes(r)) : members
+  if (!repoIds.length) return null
+  const id = uid()
+  await run(
+    `INSERT INTO product_scans (id, product_id, user_id, kind, trigger, push_repo_id, commit_sha, created_at) VALUES (?, ?, ?, 'security', ?, ?, ?, ?)`,
+    id,
+    productId,
+    userId,
+    trigger,
+    opts.push?.repoId ?? null,
+    opts.push?.commitSha ?? null,
+    now(),
+  )
+  const scanIds: string[] = []
+  for (const repoId of repoIds) scanIds.push(await createScan(userId, repoId, 'security', trigger, opts.state ?? {}, id))
+  const owned = await first<{ n: number }>('SELECT COUNT(*) AS n FROM scans WHERE product_scan_id = ?', id)
+  if (owned?.n) return { id, scanIds }
+  // Every repo already had a scan running: point at that review instead of an empty one.
+  await run('DELETE FROM product_scans WHERE id = ?', id)
+  const running = await first<{ product_scan_id: string | null }>(`SELECT product_scan_id FROM scans WHERE id = ?`, scanIds[0])
+  return { id: running?.product_scan_id ?? null, scanIds }
+}
+
+/** The product a repo belongs to, creating the user's default product if it has none. */
+export async function productIdForRepo(userId: string, repoId: number, fallbackName: string): Promise<string> {
+  const owner = await productForRepo(userId, repoId)
+  if (owner) return owner.id
+  await ensureDefaultProduct(userId, fallbackName, [repoId])
+  return (await productForRepo(userId, repoId))!.id
 }
 
 export async function enqueue(scanId: string, delaySeconds = 0): Promise<void> {
@@ -340,8 +406,23 @@ async function complete(ctx: StepCtx, leaseId: string) {
   if (ctx.scan.kind === 'understand') {
     const fresh = await first<{ onboarded_at: number | null }>('SELECT onboarded_at FROM users WHERE id = ?', ctx.user.id)
     const prior = await first<{ id: string }>(`SELECT id FROM scans WHERE user_id = ? AND repo_id = ? AND kind = 'security' LIMIT 1`, ctx.user.id, ctx.repo.id)
-    if (fresh?.onboarded_at && !prior) await createScan(ctx.user.id, ctx.repo.id, 'security', 'onboarding')
+    if (fresh?.onboarded_at && !prior && ctx.product) await joinOnboardingReview(ctx.user.id, ctx.product.id, ctx.repo.id)
   }
+}
+
+/**
+ * First report for a repo that just finished reading: it joins the product's onboarding review
+ * while that review is still running, otherwise it gets a product scan of its own.
+ */
+export async function joinOnboardingReview(userId: string, productId: string, repoId: number) {
+  const open = await first<{ id: string }>(
+    `SELECT ps.id FROM product_scans ps WHERE ps.product_id = ? AND ps.trigger = 'onboarding'
+     AND EXISTS (SELECT 1 FROM scans s WHERE s.product_scan_id = ps.id AND s.status IN ('queued','running'))
+     ORDER BY ps.created_at DESC LIMIT 1`,
+    productId,
+  )
+  if (open) await createScan(userId, repoId, 'security', 'onboarding', {}, open.id)
+  else await startProductScan(userId, productId, 'onboarding', { repoIds: [repoId] })
 }
 
 async function readFiles(ctx: StepCtx, paths: string[]) {
@@ -1217,14 +1298,14 @@ export async function scheduledTick(): Promise<void> {
     const freq = prefs.success ? prefs.data.frequency : 'manual'
     const interval = INTERVAL[freq]
     if (!interval) continue
-    const repos = await all<{ repo_id: number }>('SELECT repo_id FROM user_repositories WHERE user_id = ? AND selected = 1', u.id)
-    for (const r of repos) {
-      const last = await first<{ created_at: number }>(
-        `SELECT created_at FROM scans WHERE user_id = ? AND repo_id = ? AND kind = 'security' ORDER BY created_at DESC LIMIT 1`,
-        u.id,
-        r.repo_id,
-      )
-      if (!last || last.created_at < now() - interval) await createScan(u.id, r.repo_id, 'security', 'schedule')
+    // Recurring reports are per product: one product scan covers every member repo.
+    const products = await all<{ id: string; last: number | null }>(
+      `SELECT p.id, (SELECT MAX(ps.created_at) FROM product_scans ps WHERE ps.product_id = p.id AND ps.kind = 'security' AND ps.trigger <> 'push') AS last
+       FROM products p WHERE p.user_id = ?`,
+      u.id,
+    )
+    for (const p of products) {
+      if (!p.last || p.last < now() - interval) await startProductScan(u.id, p.id, 'schedule')
     }
   }
 }
