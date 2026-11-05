@@ -108,7 +108,7 @@ export function Brief({ data }: { data: DashboardData }) {
 
       {data.questions.length > 0 && (
         <>
-          <SectionHead aside="It couldn’t settle these from the code">Questions for you</SectionHead>
+          <SectionHead aside="It couldn’t settle these from the code" hint="Things the reviewer could not tell from the code alone, like who can reach an endpoint. Your answers are remembered for every later review of the product.">Questions for you</SectionHead>
           <QuestionList className="mt-6">
             {data.questions.map((q) => (
               <QuestionCard key={q.id} q={q} />
@@ -117,7 +117,7 @@ export function Brief({ data }: { data: DashboardData }) {
         </>
       )}
 
-      <SectionHead aside={hidden > 0 ? `${hidden} below ${data.preferences.minSeverity} hidden` : 'Latest brief per repository'}>Open findings</SectionHead>
+      <SectionHead aside={hidden > 0 ? `${hidden} below ${data.preferences.minSeverity} hidden` : 'Latest brief per repository'} hint="Unresolved issues from the latest completed brief of each repository, most severe first. Mark one fixed or dismissed from its report.">Open findings</SectionHead>
       <FindingFilters items={visible} value={filters} onChange={setFilters} />
       <ol className="mt-5">
         {visible.length === 0 && <Empty>No open findings.</Empty>}
@@ -153,6 +153,7 @@ export function Brief({ data }: { data: DashboardData }) {
             New product
           </Link>
         }
+        hint="A product is a group of repositories reviewed and viewed together, like an API, its web app and its infrastructure. They share one memory: your answers, known facts and already-reviewed files carry across all of them."
       >
         Products
       </SectionHead>
@@ -187,7 +188,7 @@ export function Brief({ data }: { data: DashboardData }) {
         ))}
       </div>
 
-      <SectionHead>Earlier briefs</SectionHead>
+      <SectionHead hint="Every review run, newest first, including ones still in progress. Open one to see its full report.">Earlier briefs</SectionHead>
       <ol className="mt-4">
         {data.scans.length === 0 && <Empty>No scans yet.</Empty>}
         {data.scans.map((s) => (

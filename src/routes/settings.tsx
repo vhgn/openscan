@@ -113,7 +113,7 @@ function Settings() {
         </>
       )}
 
-      <SectionHead>MCP</SectionHead>
+      <SectionHead hint="Model Context Protocol: lets AI assistants such as Claude, Cursor or VS Code read your briefs and start reviews on your behalf, after you approve them.">MCP</SectionHead>
       <div className="relative mt-4">
         <p className="text-[17px] leading-[1.6] text-ink-3">
           Use openscan from Claude, Cursor or any MCP client: add this server URL, then sign in when the client asks.

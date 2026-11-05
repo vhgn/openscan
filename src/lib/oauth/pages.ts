@@ -25,9 +25,11 @@ li:first-child{border-top:0}
 code{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace;font-size:14px;background:var(--wash);padding:1px 5px;border-radius:3px;word-break:break-all}
 .small{font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:13px;color:var(--muted);line-height:1.5}
 .actions{display:flex;gap:12px;align-items:center;margin-top:28px;flex-wrap:wrap}
-button{font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:14px;font-weight:500;border-radius:999px;padding:10px 20px;cursor:pointer;border:1px solid var(--ink)}
-.approve{background:var(--ink);color:var(--paper)}
-.deny{background:transparent;color:var(--ink)}
+/* same as .btn / .btn-quiet in src/styles.css */
+.btn{display:inline-flex;align-items:center;gap:.5rem;padding:.6rem 1.15rem;font-family:Inter,ui-sans-serif,system-ui,sans-serif;font-size:14px;font-weight:600;background:var(--ink);color:var(--paper);border:0;border-radius:0;cursor:pointer;white-space:nowrap;transition:background .15s}
+.btn:hover{background:#333}
+.btn-quiet{background:transparent;color:var(--ink);box-shadow:inset 0 0 0 1px rgb(20 20 20/.35)}
+.btn-quiet:hover{background:rgb(20 20 20/.04)}
 .warn{color:var(--alarm)}
 `
 
@@ -87,8 +89,8 @@ export function consentPage(input: {
 <p class="small">Client ID <code>${escapeHtml(input.clientId)}</code>. You can disconnect it at any time in Settings.</p>
 <form method="post" action="/oauth/authorize" class="actions">
 <input type="hidden" name="request_id" value="${escapeHtml(input.requestId)}">
-<button class="approve" type="submit" name="decision" value="approve">Approve</button>
-<button class="deny" type="submit" name="decision" value="deny">Deny</button>
+<button class="btn" type="submit" name="decision" value="approve">Approve</button>
+<button class="btn btn-quiet" type="submit" name="decision" value="deny">Deny</button>
 </form>`,
   )
 }

@@ -18,6 +18,7 @@
 
 	"vars": {
 		// Public URL of the app (used for OAuth callbacks and server-side AI proxy calls).
+		// Production: https://openscan.underscore.am (CI sets it from the APP_URL secret in Bitwarden).
 		"APP_URL": "http://localhost:3000",
 		// The slug of your GitHub App: https://github.com/apps/<slug>
 		"GITHUB_APP_SLUG": "openscan",

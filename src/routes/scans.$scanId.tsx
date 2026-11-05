@@ -319,7 +319,7 @@ function ScanPage() {
 
           {closed.length > 0 && (
             <>
-              <SectionHead>Set aside</SectionHead>
+              <SectionHead hint="Findings that are no longer open: rejected by the independent validator, dismissed by you, or marked fixed.">Set aside</SectionHead>
               <p className="mt-3 text-[17px] leading-[1.6] text-ink-3">Rejected by the validator, dismissed by you, or fixed. Kept so you can check the reasoning.</p>
               <ul className="mt-5 divide-y divide-rule text-[16px] leading-[1.45]">
                 {closed.map((f) => (
@@ -348,7 +348,7 @@ function ScanPage() {
 
       {d.questions.length > 0 && (
         <>
-          <SectionHead>Questions raised while reading</SectionHead>
+          <SectionHead hint="Questions this scan raised about the product. Answers become product memory, so later scans don’t ask again.">Questions raised while reading</SectionHead>
           <QuestionList className="mt-6">
             {d.questions.map((q) => (
               <QuestionCard key={q.id} q={q} />

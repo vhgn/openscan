@@ -4,6 +4,8 @@
 
 Built with **TanStack Start** on **Cloudflare Workers**, **D1** (SQLite), and **Queues**. It is installed as a **GitHub App**. Everything runs on the user's own ChatGPT plan through **[login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)** (no API keys). When the user has a **Codex Cloud environment** for a repo, the agent work runs as **Codex Cloud tasks**, with the full repository checked out in OpenAI's sandbox.
 
+**Production:** [https://openscan.underscore.am](https://openscan.underscore.am) (this is the production `APP_URL`). MCP endpoint: `https://openscan.underscore.am/mcp`.
+
 ---
 
 ## Which `.md` is for what
@@ -130,7 +132,7 @@ Setup, once:
    | --- | --- |
    | `CLOUDFLARE_API_TOKEN` | API token with *Workers Scripts: Edit*, *D1: Edit*, *Queues: Edit* (Account) |
    | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
-   | `APP_URL` | Public URL of the Worker, e.g. `https://openscan.<subdomain>.workers.dev` |
+   | `APP_URL` | Public URL of the app. Production: `https://openscan.underscore.am` |
    | `SESSION_SECRET`, `LWC_SECRET` | `openssl rand -hex 32` each |
    | `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET` | From your GitHub App |
    | `GITHUB_APP_PRIVATE_KEY` | The `.pem` contents (multi-line is fine) |
@@ -140,6 +142,17 @@ Setup, once:
 4. For the EU cloud (vault.bitwarden.eu), set the repository variable `BWS_CLOUD_REGION=eu`.
 
 The first deploy creates the D1 database `openscan` and the queue `openscan-jobs`. To reuse an existing database, add a `D1_DATABASE_ID` secret to Bitwarden and to the mapping. Finally, point the GitHub App's URLs at `APP_URL`.
+
+Production URLs (`APP_URL` = `https://openscan.underscore.am`):
+
+| What | URL |
+| --- | --- |
+| App / GitHub App homepage | `https://openscan.underscore.am` |
+| GitHub App callback URL | `https://openscan.underscore.am/api/auth/github/callback` |
+| GitHub App setup URL | `https://openscan.underscore.am/api/github/setup` |
+| GitHub App webhook URL | `https://openscan.underscore.am/api/github/webhook` |
+| MCP server | `https://openscan.underscore.am/mcp` |
+| OAuth issuer (MCP) | `https://openscan.underscore.am` |
 
 ### By hand
 
@@ -720,7 +733,7 @@ sequenceDiagram
 openscan is also an **MCP server** at `APP_URL/mcp`, so Claude, Cursor, VS Code or any MCP client can read your briefs and act on them. Add the URL as a remote (Streamable HTTP) server; the client discovers the OAuth server, registers itself, and opens a browser where you sign in with GitHub and approve the connection. No API keys.
 
 ```bash
-claude mcp add --transport http openscan https://openscan.<subdomain>.workers.dev/mcp
+claude mcp add --transport http openscan https://openscan.underscore.am/mcp
 ```
 
 | Tool | Scope | What it does |

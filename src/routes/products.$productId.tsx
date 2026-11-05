@@ -48,10 +48,11 @@ function ProductPage() {
       />
       <Lede>Repositories in a product are reviewed together. Agents see each other&rsquo;s profiles, share your answers, and skip code that was already reviewed.</Lede>
 
-      <SectionHead aside={`${members.length} selected`}>Repositories</SectionHead>
-      <ul className="mt-4 border-y border-rule">
+      <SectionHead aside={`${members.length} selected`} hint="A repository belongs to one product at a time. Picking one that is in another product moves it here.">Repositories</SectionHead>
+      {/* Fixed height, scrolls inside; repos that were already in the product when the page opened come first. */}
+      <ul className="mt-4 max-h-[22rem] overflow-y-auto overscroll-contain border-y border-rule pr-1">
         {d.repos.length === 0 && <Empty>No repositories linked yet.</Empty>}
-        {d.repos.map((r) => (
+        {[...d.repos].sort((a, b) => Number(b.member) - Number(a.member)).map((r) => (
           <li key={r.id} className="border-t border-rule first:border-t-0">
             <label className="grid cursor-pointer grid-cols-[1.75rem_1fr_auto] items-baseline py-2.5">
               <input
@@ -99,7 +100,7 @@ function ProductPage() {
 
       {d.product && (
         <>
-          <SectionHead>Memory</SectionHead>
+          <SectionHead hint="What this product’s agents remember so they don’t re-check the same things: facts and your answers, files already reviewed at the same version, and earlier verdicts on the same code.">Memory</SectionHead>
           <div className="relative mt-4 text-[19px] leading-[1.65] text-ink-2">
             This product remembers {plural(d.stats.facts, 'fact')}, {plural(d.stats.reviewed, 'reviewed file')} and {plural(d.stats.verdicts, 'verdict')}
             {d.stats.saved > 0 ? (
