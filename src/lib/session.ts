@@ -35,17 +35,26 @@ export function clearSessionCookieHeader(): string {
   return `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
 }
 
-function readCookieFrom(request: Request, name: string): string | undefined {
+/**
+ * Reads one cookie from a raw request. A value that is not valid percent-encoding is treated as
+ * absent, so a garbled cookie makes the request unauthenticated rather than throwing URIError.
+ */
+export function readCookie(request: Request, name: string): string | undefined {
   const header = request.headers.get('cookie') ?? ''
   for (const part of header.split(';')) {
     const [k, ...v] = part.trim().split('=')
-    if (k === name) return decodeURIComponent(v.join('='))
+    if (k !== name) continue
+    try {
+      return decodeURIComponent(v.join('='))
+    } catch {
+      return undefined
+    }
   }
   return undefined
 }
 
 export async function userFromRequest(request: Request): Promise<UserRow | null> {
-  const token = readCookieFrom(request, COOKIE)
+  const token = readCookie(request, COOKIE)
   return token ? userFromToken(token) : null
 }
 

@@ -12,6 +12,7 @@ import { createScan } from '#/lib/scanner/engine'
 import { saveProduct } from '#/lib/products'
 import { Route as ScansRoute } from '#/routes/api/scans/index'
 import { Route as ScanRoute } from '#/routes/api/scans/$scanId'
+import { Route as CallbackRoute } from '#/routes/api/auth/github/callback'
 import { APP_URL, insertRepo, insertUser, resetEnv, scanRow, serveRepo, stubFetch, type FetchStub, type TestEnv } from './helpers/harness.ts'
 
 type Handler = (ctx: { request: Request; params: Record<string, string> }) => Promise<Response>
@@ -21,6 +22,7 @@ function handler(route: { options: unknown }, method: 'GET' | 'POST'): Handler {
 const listScans = handler(ScansRoute, 'GET')
 const postScan = handler(ScansRoute, 'POST')
 const getScan = handler(ScanRoute, 'GET')
+const githubCallback = handler(CallbackRoute, 'GET')
 
 let t: TestEnv
 let f: FetchStub
@@ -72,13 +74,11 @@ describe('sessions', () => {
     assert.equal(await userFromRequest(req('/', { headers: cookie(token) })), null, 'expired session')
   })
 
-  test(
-    'a malformed session cookie is treated as signed out',
-    { todo: 'BUG: readCookieFrom (src/lib/session.ts) calls decodeURIComponent unguarded, so a cookie like "openscan_session=%E0%A4%A" throws URIError and every API route answers 500 instead of 401' },
-    async () => {
-      assert.equal(await userFromRequest(req('/', { headers: { cookie: 'openscan_session=%E0%A4%A' } })), null)
-    },
-  )
+  test('a malformed session cookie is treated as signed out', async () => {
+    assert.equal(await userFromRequest(req('/', { headers: { cookie: 'openscan_session=%E0%A4%A' } })), null)
+    const res = await listScans({ request: req('/api/scans', { headers: { cookie: 'openscan_session=%E0%A4%A' } }), params: {} })
+    assert.equal(res.status, 401)
+  })
 
   test('cookie headers: HttpOnly, SameSite=Lax, Secure only over https', () => {
     assert.equal(sessionCookieHeader('tok', 'https://openscan.test/x'), 'openscan_session=tok; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure')
@@ -332,5 +332,38 @@ describe('actions are scoped by user_id', () => {
     assert.deepEqual(t.db.rows('SELECT product_id, kind, content, evidence FROM memory'), [
       { product_id: product, kind: 'fact', content: 'Owner: Is it public? → Only on the VPN', evidence: 'answered by the owner' },
     ])
+  })
+})
+
+describe('GET /api/auth/github/callback', () => {
+  function serveGithubLogin() {
+    f.on('POST', 'https://github.com/login/oauth/access_token', () => Response.json({ access_token: 'gho_test' }))
+    f.on('GET', 'https://api.github.com/user', () => Response.json({ id: 4242, login: 'octo', name: null, avatar_url: null }))
+    f.on('GET', /^https:\/\/api\.github\.com\/user\/installations\?/, () => Response.json({ installations: [] }))
+  }
+  const callback = (cookie: string) =>
+    githubCallback({ request: req('/api/auth/github/callback?code=c0de&state=st4te', { headers: { cookie } }), params: {} })
+
+  beforeEach(() => {
+    t = resetEnv({ GITHUB_CLIENT_ID: 'cid', GITHUB_CLIENT_SECRET: 'csecret' })
+    serveGithubLogin()
+  })
+
+  test('honours a well-formed post-login destination', async () => {
+    const res = await callback(`openscan_oauth_state=st4te; openscan_next=${encodeURIComponent('/scans/abc?tab=findings')}`)
+    assert.equal(res.status, 302)
+    assert.equal(res.headers.get('location'), '/scans/abc?tab=findings')
+  })
+
+  test('a malformed next cookie is ignored instead of failing the sign-in', async () => {
+    const res = await callback('openscan_oauth_state=st4te; openscan_next=%E0%A4%A')
+    assert.equal(res.status, 302)
+    assert.ok(!res.headers.get('location')?.includes('%E0'), 'falls back to the landing page')
+    assert.match(res.headers.get('set-cookie') ?? '', /openscan_session=/)
+  })
+
+  test('a malformed state cookie is an invalid state (400), not a crash', async () => {
+    const res = await callback('openscan_oauth_state=%E0%A4%A')
+    assert.equal(res.status, 400)
   })
 })
