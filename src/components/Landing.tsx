@@ -1,4 +1,6 @@
-import type { LandingProps } from './types'
+export interface LandingProps {
+  cta: { href: string; label: string }
+}
 
 const serif = "font-['Newsreader',ui-serif,Georgia,serif]"
 const display = "font-['Instrument_Serif',ui-serif,Georgia,serif]"
@@ -18,10 +20,10 @@ function Note({ n, children }: { n: number; children: React.ReactNode }) {
 }
 
 /**
- * Option B — "Essay": text is the product. A short argument addressed to engineering
- * leaders, set like a well-made long read: one column, margin notes, highlighter.
+ * The public landing page: a short argument addressed to engineering leaders,
+ * set like a well-made long read (one column, margin notes, cream squiggle).
  */
-export function DesignEssay({ cta, secondary }: LandingProps) {
+export function Landing({ cta }: LandingProps) {
   return (
     <div className={`relative min-h-screen bg-[#fbfbf9] text-[#141414] ${serif}`}>
       <nav className="mx-auto flex max-w-5xl items-baseline justify-between gap-4 px-6 py-6 text-[15px]">
@@ -68,7 +70,7 @@ export function DesignEssay({ cta, secondary }: LandingProps) {
             </blockquote>
 
             <h2 className="mb-3 pt-10 text-[13px] uppercase tracking-[0.2em] text-[#6f6f6a]">What lands on your desk</h2>
-            <p>Each week, or on every push if you prefer, a one-page brief that reads like this sample:</p>
+            <p>Each week, or on every push if you prefer, a one-page brief that reads like this:</p>
             <ol className="list-none space-y-4 border-y border-[#141414]/15 py-6 text-[18px]">
               {[
                 ['Fix now', 'Forged Stripe webhooks can mark invoices as paid.', 'Verify the signature on the raw body before any state change. About half a day.'],
@@ -92,15 +94,10 @@ export function DesignEssay({ cta, secondary }: LandingProps) {
             </div>
           </div>
 
-          <div className="mt-14 flex flex-wrap items-center gap-x-6 gap-y-3">
-            <a href={cta.href} className="bg-[#141414] px-6 py-3 font-['Inter',ui-sans-serif,system-ui,sans-serif] text-[15px] font-semibold text-[#fbfbf9] hover:bg-[#333]">
+          <div className="mt-14">
+            <a href={cta.href} className="inline-block bg-[#141414] px-6 py-3 font-['Inter',ui-sans-serif,system-ui,sans-serif] text-[15px] font-semibold text-[#fbfbf9] hover:bg-[#333]">
               {cta.label}
             </a>
-            {secondary && (
-              <a href={secondary.href} className="text-[17px] underline decoration-1 underline-offset-4">
-                {secondary.label}
-              </a>
-            )}
           </div>
           <p className="mt-6 text-[15px] italic text-[#6f6f6a]">— the openscan team</p>
         </div>

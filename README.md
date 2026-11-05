@@ -63,7 +63,7 @@ The project was built with **Claude Code** as a pair programmer. The product own
 **Where it went wrong**
 
 - **Scope creep.** The brief expected about 3 hours. The agent kept adding well-built optional systems (Codex Cloud, product memory, six designs, a full RFC-compliant OAuth server for MCP) without flagging their upkeep. MCP and OAuth were the clearest case and are now removed.
-- **Built, then thrown away:** the mock-AI mode and most design options.
+- **Built, then thrown away:** the mock-AI mode, all design options, and the `/design` page with its sample brief.
 - **Confident without checking.** The Codex client follows endpoints mirrored from `openai/codex` and has never run against a real account. In CI it pinned `bitwarden/sm-action@v3`, a tag that doesn't exist.
 - **Its own bugs:** the file-ranking bug was its code; its tests caught it.
 - **Too much documentation:** the README reached 800 lines. The detail now lives in [docs/TECHNICAL.md](./docs/TECHNICAL.md).
