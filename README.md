@@ -137,7 +137,7 @@ Setup, once:
    | `GITHUB_APP_PRIVATE_KEY` | The `.pem` contents (multi-line is fine) |
 
 2. Create a **machine account** with read access to that project and generate an **access token**. Add it to the repository as the Actions secret **`BWS_ACCESS_TOKEN`**. It is the only secret stored in GitHub.
-3. Copy each secret's **ID** from Bitwarden into the `secrets:` mapping of the *Load secrets from Bitwarden* step, replacing the placeholder IDs (`00000000-…-0000000000NN`). IDs aren't sensitive. Until they're replaced, the deploy job stops with a clear error.
+3. The *Load secrets from Bitwarden* step maps each secret **ID** (not sensitive) to its env var name. If you recreate a secret in Bitwarden, update its ID there.
 4. For the EU cloud (vault.bitwarden.eu), set the repository variable `BWS_CLOUD_REGION=eu`.
 
 The first deploy creates the D1 database `openscan` and the queue `openscan-jobs`. To reuse an existing database, add a `D1_DATABASE_ID` secret to Bitwarden and to the mapping. Finally, point the GitHub App's URLs at `APP_URL`.

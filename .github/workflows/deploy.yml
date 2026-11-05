@@ -62,31 +62,24 @@ jobs:
       # Bitwarden's documented step: https://github.com/bitwarden/sm-action
       # Each line maps a Bitwarden secret ID (Secrets Manager → Secrets → the
       # secret → copy its ID; not sensitive) to the env var it becomes. Values are
-      # masked in logs. Replace every placeholder ID before the first deploy.
-      - name: Check the Bitwarden secret IDs are filled in
-        run: |
-          if grep -Eq '^ +0{8}-0{4}-0{4}-0{4}-0{10}[0-9]{2} >' .github/workflows/deploy.yml; then
-            echo "::error file=.github/workflows/deploy.yml::Replace the placeholder Bitwarden secret IDs in the 'Load secrets from Bitwarden' step."
-            exit 1
-          fi
-
+      # masked in logs. All IDs are in the Bitwarden project "OpenScan".
       - name: Load secrets from Bitwarden
         uses: bitwarden/sm-action@v3
         with:
           access_token: ${{ secrets.BWS_ACCESS_TOKEN }}
           cloud_region: ${{ vars.BWS_CLOUD_REGION || 'us' }}
           secrets: |
-            00000000-0000-0000-0000-000000000001 > CLOUDFLARE_API_TOKEN
-            00000000-0000-0000-0000-000000000002 > CLOUDFLARE_ACCOUNT_ID
-            00000000-0000-0000-0000-000000000003 > APP_URL
-            00000000-0000-0000-0000-000000000004 > SESSION_SECRET
-            00000000-0000-0000-0000-000000000005 > LWC_SECRET
-            00000000-0000-0000-0000-000000000006 > GITHUB_APP_ID
-            00000000-0000-0000-0000-000000000007 > GITHUB_APP_SLUG
-            00000000-0000-0000-0000-000000000008 > GITHUB_APP_PRIVATE_KEY
-            00000000-0000-0000-0000-000000000009 > GITHUB_CLIENT_ID
-            00000000-0000-0000-0000-000000000010 > GITHUB_CLIENT_SECRET
-            00000000-0000-0000-0000-000000000011 > GITHUB_WEBHOOK_SECRET
+            b2ada4f0-d843-4cd8-a897-b4f9013afe17 > CLOUDFLARE_API_TOKEN
+            af427321-b9b4-4e26-a753-b4f90131ea82 > CLOUDFLARE_ACCOUNT_ID
+            efc767ef-e5f1-4976-89bb-b4f90131bc4a > APP_URL
+            6093f795-4719-4760-836d-b4f900e2ff65 > SESSION_SECRET
+            c238c477-efa4-4bd4-a29a-b4f900e317c6 > LWC_SECRET
+            fea6502e-449e-47fe-b2d3-b4f901313593 > GITHUB_APP_ID
+            57872c5c-0e64-433a-a278-b4f901319c8d > GITHUB_APP_SLUG
+            35700457-95b2-48d8-b98b-b4f901318c10 > GITHUB_APP_PRIVATE_KEY
+            1a470d4d-55fa-4b97-9d44-b4f9013141a6 > GITHUB_CLIENT_ID
+            0d90312f-35e8-4df2-a7af-b4f901315bfc > GITHUB_CLIENT_SECRET
+            7ee9a096-f3bc-40d4-a370-b4f901303433 > GITHUB_WEBHOOK_SECRET
 
       - name: Provision D1 database and queue
         run: node scripts/ci/provision.mjs
