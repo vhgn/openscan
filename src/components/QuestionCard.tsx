@@ -1,5 +1,6 @@
 import { useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import { answerQuestion, dismissQuestion } from '#/server-fns/app'
 
 export interface QuestionLike {
@@ -21,12 +22,12 @@ export function QuestionCard({ q, compact = false }: { q: QuestionLike; compact?
   const router = useRouter()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const size = compact ? 'text-[16px]' : 'text-[19px]'
+  const size = compact ? 'text-[16px]' : 'text-[18px]'
 
   if (q.status !== 'open') {
     return (
       <div>
-        <p className={`${size} leading-[1.5] text-ink-3`}>{q.question}</p>
+        <p className={`${size} leading-[1.35] text-ink-3`}>{q.question}</p>
         <p className={`mt-1 ${compact ? 'text-[15px]' : 'text-[17px]'} italic text-ink-2`}>
           {q.status === 'dismissed' ? 'Skipped.' : q.answer}{' '}
           <span className="font-sans text-[12px] not-italic text-muted">
@@ -40,11 +41,11 @@ export function QuestionCard({ q, compact = false }: { q: QuestionLike; compact?
 
   return (
     <div>
-      {q.repo && !compact && <p className="font-sans text-[12px] text-muted">{q.repo}</p>}
-      <p className={`${size} leading-[1.5]`}>{q.question}</p>
-      {q.rationale && <p className="mt-1 font-sans text-[13px] leading-snug text-muted">{q.rationale}</p>}
+      {q.repo && !compact && <p className="mb-0.5 font-sans text-[12px] text-muted">{q.repo}</p>}
+      <p className={`${size} leading-[1.35]`}>{q.question}</p>
+      {q.rationale && <p className="mt-1.5 font-sans text-[13px] leading-snug text-muted">{q.rationale}</p>}
       <form
-        className="mt-3 flex flex-wrap items-end gap-x-3 gap-y-2"
+        className="mt-2 flex flex-wrap items-end gap-x-3 gap-y-2"
         onSubmit={async (e) => {
           e.preventDefault()
           if (!text.trim()) return
@@ -77,4 +78,12 @@ export function QuestionCard({ q, compact = false }: { q: QuestionLike; compact?
       </form>
     </div>
   )
+}
+
+/**
+ * A stack of question cards. Each card is kept tight inside; generous space
+ * between cards makes it obvious where one question ends.
+ */
+export function QuestionList({ children, compact = false, className = '' }: { children: ReactNode; compact?: boolean; className?: string }) {
+  return <div className={`${compact ? 'space-y-8' : 'space-y-12'} ${className}`}>{children}</div>
 }

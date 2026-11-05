@@ -28,7 +28,7 @@ import { all, batch, first, now, parseJson, run, uid } from '../db'
 import { sha256Hex } from '../crypto'
 import { backgroundLLM, type BackgroundLLM } from '../chatgpt'
 import { fetchChangedFiles, fetchCodeScanningAlerts, fetchFile, fetchTree, getRepo, repoToken } from '../github/repos'
-import { askJson, MOCK_LLM } from '../ai/llm'
+import { askJson } from '../ai/llm'
 import type { z } from 'zod'
 import * as A from '../ai/agents'
 import { selectFiles, selectLockfiles, treeOverview } from './select-files'
@@ -37,6 +37,7 @@ import { heuristicFindings, heuristicProfile, heuristicQuestions } from './heuri
 import { brotliFindings, installScriptPackages, runtimeFindings, selectRuntimeFiles } from './runtime-advisories'
 import { huntPlaybook, reconPlaybook, reportPlaybook, validatePlaybook } from '../skills/playbooks'
 import { tracePaths } from './trace'
+import { similarQuestion } from '../memory-match'
 import { codexClientFor, codexEnvironmentFor } from '../codex/runtime'
 import { environmentsSettingsUrl, taskUrl } from '../codex/cloud'
 import * as CP from '../codex/prompts'
@@ -288,7 +289,7 @@ interface StepResult {
 async function resolveEngine(ctx: StepCtx): Promise<BackgroundLLM | null> {
   const { scan, user } = ctx
   const mode = aiMode()
-  const llm = mode === 'mock' ? MOCK_LLM : mode === 'auto' ? await backgroundLLM(user).catch(() => null) : null
+  const llm = mode === 'auto' ? await backgroundLLM(user).catch(() => null) : null
   if (!scan.engine) {
     let engine = llm ? 'ai' : 'heuristic'
     if (llm) {
@@ -483,18 +484,36 @@ async function knownAnswers(ctx: StepCtx) {
   )
 }
 
+/** Questions the owner skipped: agents are told not to ask these (or similar) again. */
+async function skippedQuestions(ctx: StepCtx) {
+  const rows = await all<{ question: string }>(
+    `SELECT question FROM questions WHERE ${Q_SCOPE} AND status = 'dismissed' ORDER BY answered_at DESC LIMIT 30`,
+    ctx.user.id,
+    ctx.repo.id,
+    ctx.product?.id ?? null,
+  )
+  return rows.map((r) => r.question)
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()
 
 async function addQuestions(ctx: StepCtx, qs: Array<{ question: string; rationale: string; answer?: string; evidence?: string }>) {
   if (!qs.length) return
-  const existing = await all<{ question: string }>(`SELECT question FROM questions WHERE ${Q_SCOPE}`, ctx.user.id, ctx.repo.id, ctx.product?.id ?? null)
+  const existing = await all<{ question: string; status: string }>(`SELECT question, status FROM questions WHERE ${Q_SCOPE}`, ctx.user.id, ctx.repo.id, ctx.product?.id ?? null)
   const seen = new Set(existing.map((q) => norm(q.question)))
+  const skipped = existing.filter((q) => q.status === 'dismissed').map((q) => q.question)
+  let suppressed = 0
   const openCount = (await openQuestions(ctx)).length
   let budget = Math.max(0, 10 - openCount)
   const ops: Array<[string, Array<string | number | null>]> = []
   for (const q of qs) {
     const key = norm(q.question)
     if (!key || seen.has(key)) continue
+    // The owner skipped a question like this before: don't ask it again in other words.
+    if (!q.answer && similarQuestion(q.question, skipped)) {
+      suppressed++
+      continue
+    }
     if (!q.answer && budget-- <= 0) continue
     seen.add(key)
     ops.push([
@@ -507,6 +526,7 @@ async function addQuestions(ctx: StepCtx, qs: Array<{ question: string; rational
   const asked = ops.filter((o) => o[1][6] === 'open').length
   const selfAnswered = ops.length - asked
   if (ops.length) await logEvent(ctx.scan.id, `Raised ${asked} question(s)${selfAnswered ? `, answered ${selfAnswered} itself` : ''}`)
+  if (suppressed) await logEvent(ctx.scan.id, `Dropped ${suppressed} question(s) similar to ones you skipped`)
 }
 
 async function applyAnswers(ctx: StepCtx, answers: Array<{ questionId: string; answer: string; evidence: string }>) {
@@ -611,11 +631,11 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
             overview: state.overview ?? '',
             notes: state.notes ?? [],
             openQuestions: await openQuestions(ctx),
+            skippedQuestions: await skippedQuestions(ctx),
             files,
             userContext: ctx.prefs.context,
           }),
           schema: A.readerOutput,
-          name: 'reader',
           effort: 'low',
         })
         state.notes = [...(state.notes ?? []), ...out.notes].slice(-60)
@@ -646,7 +666,6 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
             userContext: ctx.prefs.context,
           }),
           schema: A.profileOutput,
-          name: 'profile',
           effort: 'medium',
         })
         const { answers, ...rest } = out
@@ -716,9 +735,9 @@ async function securityStep(ctx: StepCtx): Promise<StepResult> {
             })),
             userContext: prefs.context,
             changed: state.changed,
+            skippedQuestions: await skippedQuestions(ctx),
           }),
           schema: A.reviewOutput,
-          name: 'review',
           effort: prefs.depth === 'triage' ? 'low' : 'medium',
         })
         await saveFindings(ctx, out.findings.map((f) => ({ ...f, source: 'ai-review' as const, skills: playbook.skills })))
@@ -903,7 +922,7 @@ async function runCodexTask<R extends CP.CodexRole>(
 }
 
 async function codexReconStep(ctx: StepCtx): Promise<StepResult> {
-  const r = await runCodexTask(ctx, 'recon', async () => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.prefs.context, openQuestions: await openQuestions(ctx) }), 15)
+  const r = await runCodexTask(ctx, 'recon', async () => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.prefs.context, openQuestions: await openQuestions(ctx), skippedQuestions: await skippedQuestions(ctx) }), 15)
   if ('step' in r) return r.step
   const { questions, answers, ...profile } = r.done
   await applyAnswers(ctx, answers)
@@ -931,6 +950,7 @@ async function codexHuntStep(ctx: StepCtx, profile: RepoProfile | null): Promise
         alreadyFound: already.map((a) => a.title),
         changed: ctx.state.changed,
         priorityFiles: ctx.state.files ?? [],
+        skippedQuestions: await skippedQuestions(ctx),
       })
     },
     22,
@@ -1066,7 +1086,6 @@ async function validateStep(ctx: StepCtx, profile: RepoProfile | null): Promise<
           userContext: ctx.prefs.context,
         }),
         schema: A.validateOutput,
-          name: 'validate',
         effort: ctx.prefs.depth === 'triage' ? 'medium' : 'high',
       })
       await applyVerdict(ctx, f, out)
@@ -1102,7 +1121,6 @@ async function triage(ctx: StepCtx, profile: RepoProfile | null) {
         findings: rows.slice(0, 80).map((r, index) => ({ index, ...r })),
       }),
       schema: A.triageOutput,
-          name: 'triage',
       effort: prefs.depth === 'deep_poc' ? 'high' : 'medium',
     })
     const ops: Array<[string, Array<string | number | null>]> = []

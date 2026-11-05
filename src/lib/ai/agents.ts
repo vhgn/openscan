@@ -5,9 +5,27 @@ import type { Preferences, RepoProfile } from '../types'
 const severity = z.enum(['critical', 'high', 'medium', 'low', 'info'])
 
 export const newQuestion = z.object({
-  question: z.string().describe('A specific question about the project a security reviewer would need answered'),
-  rationale: z.string().describe('Why the answer changes the security assessment'),
+  question: z.string().describe('A specific, high-impact question only the owner can answer; its answer must change a severity or a verdict'),
+  rationale: z.string().describe('Which findings or severities the answer changes, and how'),
 })
+
+/**
+ * Shared bar for raising owner questions ("Questions for you" in the brief).
+ * Owners answer these by hand, so only ask what moves the security outcome.
+ */
+export const QUESTION_RULES = `Questions for the owner (shown to them as "Questions for you"):
+- Ask only the few questions whose answers have the biggest impact on the security assessment: they would raise or lower a severity, confirm or reject a finding, or change which parts of the code are attack surface. Typical examples: internet exposure, who the users and attackers are, data sensitivity, the intended auth/role model, tenancy, deployment controls not visible in source.
+- Do NOT ask about small architecture or implementation details (which library, folder layout, naming, how a module is wired, coding conventions, build tooling) or anything you could settle by reading more code. Do not ask what the code already shows; read it instead.
+- Before asking, check: "If the owner answers either way, would a finding or severity change?" If not, do not ask.
+- Fewer is better; returning no questions is fine. Never rephrase an existing open question or known answer.
+- The owner SKIPPED some earlier questions (listed under "Skipped questions"). Treat each as a signal that the owner does not want that kind of question: never ask it again, never ask a reworded or narrower variant of it, and avoid questions on the same topic.`
+
+/** Prompt block listing the questions the owner skipped, so agents stop asking that kind of thing. */
+export function skippedBlock(skipped: string[] = []) {
+  return `Skipped questions (the owner chose not to answer these; do NOT ask them or anything similar):
+${skipped.length ? skipped.map((q) => `- ${q}`).join('\n') : '(none)'}`
+}
+
 export const answer = z.object({
   questionId: z.string(),
   answer: z.string(),
@@ -18,7 +36,7 @@ export const answer = z.object({
 
 export const readerOutput = z.object({
   notes: z.array(z.string()).describe('Durable facts learned from these files (stack, data flow, trust boundaries, auth, deployment)'),
-  questions: z.array(newQuestion).describe('New open questions that the code alone cannot answer yet. Max 3.'),
+  questions: z.array(newQuestion).describe('New high-impact open questions the code alone cannot answer. Max 3; usually 0-1.'),
   answers: z.array(answer).describe('Answers to previously open questions that these files settle'),
 })
 
@@ -26,7 +44,7 @@ export const READER_SYSTEM = `You are the "reader" agent of openscan, an AI appl
 You read a repository batch by batch to build an accurate mental model BEFORE any security review.
 Rules:
 - Record concise, durable facts as notes (no speculation without saying so).
-- Raise questions only when the answer materially changes security risk (exposure, data sensitivity, auth model, tenancy, deployment, threat model). Do not ask what the code already shows.
+${QUESTION_RULES}
 - When files you are reading settle an open question, answer it with evidence (file path). Prefer answering over asking.
 - Never invent files you were not shown.`
 
@@ -37,6 +55,7 @@ export function readerPrompt(input: {
   openQuestions: Array<{ id: string; question: string }>
   files: Array<{ path: string; content: string }>
   userContext: string
+  skippedQuestions?: string[]
 }) {
   return `Repository: ${input.repo}
 User-provided context: ${input.userContext || '(none yet)'}
@@ -49,6 +68,8 @@ ${input.notes.length ? input.notes.map((n) => `- ${n}`).join('\n') : '(none)'}
 
 Open questions (answer them if these files settle them):
 ${input.openQuestions.length ? input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') : '(none)'}
+
+${skippedBlock(input.skippedQuestions)}
 
 Files in this batch:
 ${input.files.map((f) => `=== ${f.path} ===\n${f.content}`).join('\n\n')}`
@@ -104,7 +125,7 @@ export const findingSchema = z.object({
 
 export const reviewOutput = z.object({
   findings: z.array(findingSchema),
-  questions: z.array(newQuestion).describe('Questions you could not answer from code that block a confident verdict. Max 2.'),
+  questions: z.array(newQuestion).describe('High-impact questions you could not answer from code that block a confident verdict. Max 2; usually 0.'),
   answers: z.array(answer),
 })
 
@@ -117,6 +138,7 @@ Calibrate severity to the repository profile and known answers (exposure, data, 
 Focus areas requested by the user: ${prefs.focus.join(', ')}.
 Audience: ${prefs.audience}. Minimum severity of interest: ${prefs.minSeverity}.
 If something would be critical only under an unknown assumption, report it with lower confidence AND ask the question.
+${QUESTION_RULES}
 Files marked CHANGED come from the push that triggered this scan.`
 }
 
@@ -128,6 +150,7 @@ export function reviewPrompt(input: {
   files: Array<{ path: string; content: string }>
   userContext: string
   changed?: string[]
+  skippedQuestions?: string[]
 }) {
   return `Repository: ${input.repo}
 User context: ${input.userContext || '(none)'}
@@ -138,6 +161,8 @@ ${input.knownAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n') |
 
 Open questions (answer if these files settle them):
 ${input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') || '(none)'}
+
+${skippedBlock(input.skippedQuestions)}
 
 Files:
 ${input.files.map((f) => `=== ${f.path}${input.changed?.includes(f.path) ? ' (CHANGED)' : ''} ===\n${f.content}`).join('\n\n')}`

@@ -62,10 +62,11 @@ function ProductPage() {
         A push to a repository marked <em>on push</em> starts a review of that repository inside the product.
       </Lede>
 
-      <SectionHead aside={`${members.length} selected`}>Repositories</SectionHead>
-      <ul className="mt-4 border-y border-rule">
+      <SectionHead aside={`${members.length} selected`} hint="A repository belongs to one product at a time. Picking one that is in another product moves it here.">Repositories</SectionHead>
+      {/* Fixed height, scrolls inside; repos that were already in the product when the page opened come first. */}
+      <ul className="mt-4 max-h-[22rem] overflow-y-auto overscroll-contain border-y border-rule pr-1">
         {d.repos.length === 0 && <Empty>No repositories linked yet.</Empty>}
-        {d.repos.map((r) => (
+        {[...d.repos].sort((a, b) => Number(b.member) - Number(a.member)).map((r) => (
           <li key={r.id} className="border-t border-rule first:border-t-0">
             <div className="grid grid-cols-[1fr_auto] items-baseline gap-4 py-2.5">
               <label className="grid cursor-pointer grid-cols-[1.75rem_1fr] items-baseline">
@@ -137,10 +138,10 @@ function ProductPage() {
 
       {d.product && (
         <>
-          <SectionHead aside={live ? 'In progress' : undefined}>Reviews</SectionHead>
+          <SectionHead aside={live ? 'In progress' : undefined} hint="Each review scans this product’s repositories together. A push to a repository marked on push reviews just that repository.">Reviews</SectionHead>
           <ProductScans items={d.productScans} showProduct={false} empty="No reviews of this product yet." />
 
-          <SectionHead>Memory</SectionHead>
+          <SectionHead hint="What this product’s agents remember so they don’t re-check the same things: facts and your answers, files already reviewed at the same version, and earlier verdicts on the same code.">Memory</SectionHead>
           <div className="relative mt-4 text-[19px] leading-[1.65] text-ink-2">
             This product remembers {plural(d.stats.facts, 'fact')}, {plural(d.stats.reviewed, 'reviewed file')} and {plural(d.stats.verdicts, 'verdict')}
             {d.stats.saved > 0 ? (
@@ -177,12 +178,12 @@ function ProductPage() {
           <ul className="mt-4">
             {rows.length === 0 && <Empty>Nothing remembered yet. Memory fills in as scans run.</Empty>}
             {rows.map((m) => (
-              <li key={m.id} className="grid grid-cols-[1fr_auto] items-baseline gap-4 border-t border-rule py-3 first:border-t-0">
+              <li key={m.id} className="grid grid-cols-[1fr_auto] items-baseline gap-4 border-t border-rule py-4 first:border-t-0">
                 <span className="min-w-0">
-                  <span className={`block ${m.kind === 'reviewed' ? 'truncate font-mono text-[13px]' : 'text-[17px] leading-[1.5]'}`}>
+                  <span className={`block ${m.kind === 'reviewed' ? 'truncate font-mono text-[13px]' : 'text-[17px] leading-[1.4]'}`}>
                     {m.kind === 'reviewed' ? m.key.slice(m.key.indexOf(':') + 1) : m.content}
                   </span>
-                  <span className="block font-sans text-[12px] text-muted">
+                  <span className="mt-0.5 block font-sans text-[12px] text-muted">
                     {m.repo ?? 'product-wide'}
                     {m.kind === 'reviewed' ? ` · ${m.content}` : ''}
                     {m.hits ? ` · reused ${m.hits}×` : ''} · {timeAgo(m.updatedAt)}

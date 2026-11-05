@@ -4,7 +4,7 @@
  * and a cream squiggle for emphasis. Tokens live in src/styles.css.
  */
 import { Link } from '@tanstack/react-router'
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 
 export interface MastheadUser {
   login: string
@@ -92,10 +92,37 @@ export function Margin({ children, className = '' }: { children: ReactNode; clas
   )
 }
 
-export function SectionHead({ children, aside, className = 'mt-16' }: { children: ReactNode; aside?: ReactNode; className?: string }) {
+/**
+ * A term with an explanation on hover or keyboard focus. The dotted underline
+ * says "there is more here"; the note itself is a small ink card below the term.
+ */
+export function Hint({ text, children }: { text: ReactNode; children: ReactNode }) {
+  const id = useId()
+  return (
+    <span className="group/hint relative inline-block">
+      <span
+        tabIndex={0}
+        aria-describedby={id}
+        className="cursor-help underline decoration-faint decoration-dotted decoration-1 underline-offset-[5px] outline-none group-hover/hint:decoration-ink focus-visible:decoration-ink"
+      >
+        {children}
+      </span>
+      <span
+        id={id}
+        role="tooltip"
+        className="pointer-events-none invisible absolute left-0 top-full z-30 mt-2.5 w-72 max-w-[calc(100vw-2rem)] bg-ink px-3.5 py-2.5 font-sans text-[12.5px] font-normal normal-case leading-snug tracking-normal text-paper opacity-0 shadow-[0_6px_24px_rgb(20_20_20/0.18)] transition-opacity duration-150 group-hover/hint:visible group-hover/hint:opacity-100 group-focus-within/hint:visible group-focus-within/hint:opacity-100"
+      >
+        {text}
+      </span>
+    </span>
+  )
+}
+
+/** Small-caps section label; `hint` explains the term in a tooltip. */
+export function SectionHead({ children, aside, hint, className = 'mt-20' }: { children: ReactNode; aside?: ReactNode; hint?: ReactNode; className?: string }) {
   return (
     <div className={`flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 ${className}`}>
-      <h2 className="label">{children}</h2>
+      <h2 className="label">{hint ? <Hint text={hint}>{children}</Hint> : children}</h2>
       {aside && <span className="font-sans text-[13px] text-muted">{aside}</span>}
     </div>
   )

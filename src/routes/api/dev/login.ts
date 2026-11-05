@@ -5,11 +5,12 @@ import { gh } from '#/lib/github/app'
 import { publicTree, repoUpsert, type GhRepo } from '#/lib/github/repos'
 import { createSession, sessionCookieHeader } from '#/lib/session'
 import { landingPathFor, upsertGithubUser } from '#/lib/users'
+import { safeNextPath } from '#/lib/oauth/core'
 
 /**
  * DEV ONLY (DEV_DEMO_LOGIN=1): signs in a fake GitHub user and links public
  * repositories (read anonymously), so the whole flow can be tried without
- * creating a GitHub App. ?repos=owner/a,owner/b
+ * creating a GitHub App. ?repos=owner/a,owner/b&next=/path
  */
 function hashId(name: string): number {
   let h = 0
@@ -52,7 +53,7 @@ export const Route = createFileRoute('/api/dev/login')({
         const session = await createSession(user.id)
         return new Response(null, {
           status: 302,
-          headers: { location: landingPathFor(user), 'set-cookie': sessionCookieHeader(session, request.url) },
+          headers: { location: safeNextPath(url.searchParams.get('next')) ?? landingPathFor(user), 'set-cookie': sessionCookieHeader(session, request.url) },
         })
       },
     },

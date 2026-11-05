@@ -1,7 +1,7 @@
 import { Link, useNavigate, useRouter, useSearch } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { ErrorNote, Lede, Page, Progress, Squiggle, StatusMark, Title, phaseLabel, plural } from '#/components/ui'
-import { QuestionCard } from '#/components/QuestionCard'
+import { QuestionCard, QuestionList } from '#/components/QuestionCard'
 import { ChatGPTConnect } from '#/components/ChatGPTConnect'
 import { PREFERENCE_STEPS, PreferencesForm } from '#/components/PreferencesForm'
 import { finishOnboarding, getInstallTargets, refreshRepos, savePreferences, saveRepoSelection, skipChatGPT, type OnboardingData } from '#/server-fns/app'
@@ -96,7 +96,7 @@ function AccountList({ data, targets, compact = false }: { data: OnboardingData;
   const [refreshing, setRefreshing] = useState(false)
   return (
     <div>
-      <ul className={compact ? 'space-y-4' : 'border-y border-rule'}>
+      <ul className={compact ? 'space-y-5' : 'border-y border-rule'}>
         {targets === null && <li className="py-3 text-[16px] italic text-muted">Looking up your organizations…</li>}
         {targets?.map((t) => (
           <li key={t.login} className={compact ? '' : 'grid grid-cols-[2.5rem_1fr_auto] items-center gap-x-3 border-t border-rule py-3 first:border-t-0'}>
@@ -232,7 +232,7 @@ function PickRepos({ data, targets }: { data: OnboardingData; targets: InstallTa
             const repos = shown.filter((r) => r.fullName.startsWith(`${owner}/`))
             const allOn = repos.every((r) => selected.includes(r.id))
             return (
-              <section key={owner} className="mt-6">
+              <section key={owner} className="mt-12 first-of-type:mt-6">
                 <div className="flex items-baseline justify-between gap-4 border-b border-rule pb-2">
                   <h2 className="label">{owner}</h2>
                   <button
@@ -325,11 +325,11 @@ function ReadingPanel({ data, showReading = true }: { data: OnboardingData; show
       {showReading && (
       <div>
         <p className="label">The AI is reading</p>
-        <ul className="mt-4 space-y-4">
+        <ul className="mt-4 space-y-6">
           {data.reading.length === 0 && <li className="text-[16px] italic text-muted">Starting…</li>}
           {data.reading.map((r) => (
             <li key={r.id}>
-              <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <div className="mb-1 flex items-baseline justify-between gap-2">
                 <a href={`/scans/${r.id}`} className="flex min-w-0 items-center gap-2 truncate text-[16px] hover:underline hover:decoration-1 hover:underline-offset-4">
                   <StatusMark status={r.status} />
                   {r.repo}
@@ -348,7 +348,7 @@ function ReadingPanel({ data, showReading = true }: { data: OnboardingData; show
           Its questions {open.length > 0 && <span className="text-amber">· {open.length} open</span>}
         </p>
         <p className="mt-2 font-sans text-[13px] leading-snug text-muted">It answers its own questions as it reads further. What it can&rsquo;t settle stays here for you.</p>
-        <div className="mt-5 space-y-6">
+        <QuestionList compact className="mt-5">
           {open.map((q) => (
             <QuestionCard key={q.id} q={q} compact />
           ))}
@@ -356,7 +356,7 @@ function ReadingPanel({ data, showReading = true }: { data: OnboardingData; show
             <QuestionCard key={q.id} q={q} compact />
           ))}
           {data.questions.length === 0 && <p className="text-[16px] italic text-muted">None yet.</p>}
-        </div>
+        </QuestionList>
       </div>
     </div>
   )
@@ -411,9 +411,9 @@ function WaitingStep({ data }: { data: OnboardingData }) {
               ? 'Each repository has a profile, and your first security brief is already being written. Answering the open questions makes it sharper.'
               : 'It is mapping your stack, data stores and trust boundaries, and answering its own questions on the way. This usually takes a few minutes.'}
           </Lede>
-          <div className="mt-10 space-y-6">
+          <div className="mt-10 space-y-8">
             {data.reading.map((r) => (
-              <div key={r.id} className="border-t border-rule pt-4">
+              <div key={r.id} className="border-t border-rule pt-5">
                 <div className="mb-2 flex items-baseline justify-between gap-3">
                   <span className="flex items-center gap-2 text-[19px]">
                     <StatusMark status={r.status} /> {r.repo}
@@ -423,7 +423,7 @@ function WaitingStep({ data }: { data: OnboardingData }) {
                   </a>
                 </div>
                 <Progress value={r.status === 'completed' ? 100 : r.progress} />
-                <p className="mt-2 font-sans text-[12.5px] text-muted">
+                <p className="mt-1.5 font-sans text-[12.5px] text-muted">
                   {r.status === 'completed' ? 'Profile ready' : r.status === 'failed' ? 'Failed. You can retry from the dashboard.' : phaseLabel(r.phase)}
                 </p>
               </div>

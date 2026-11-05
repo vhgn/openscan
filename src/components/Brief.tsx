@@ -1,7 +1,7 @@
 import { Link, useRouter } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { Empty, Lede, Margin, Page, SectionHead, Severity, StatusMark, Title, plural, spell } from '#/components/ui'
-import { QuestionCard } from '#/components/QuestionCard'
+import { QuestionCard, QuestionList } from '#/components/QuestionCard'
 import { Select } from '#/components/Select'
 import { FindingFilters, applyFindingFilters, type FindingFilterState } from '#/components/FindingFilters'
 import { ProductScans, isLive } from '#/components/ProductScans'
@@ -125,28 +125,28 @@ export function Brief({ data }: { data: DashboardData }) {
 
       {data.questions.length > 0 && (
         <>
-          <SectionHead aside="It couldn’t settle these from the code">Questions for you</SectionHead>
-          <div className="mt-5 space-y-7">
+          <SectionHead aside="It couldn’t settle these from the code" hint="Things the reviewer could not tell from the code alone, like who can reach an endpoint. Your answers are remembered for every later review of the product.">Questions for you</SectionHead>
+          <QuestionList className="mt-6">
             {data.questions.map((q) => (
               <QuestionCard key={q.id} q={q} />
             ))}
-          </div>
+          </QuestionList>
         </>
       )}
 
-      <SectionHead aside={hidden > 0 ? `${hidden} below ${data.preferences.minSeverity} hidden` : 'Latest brief per repository'}>Open findings</SectionHead>
+      <SectionHead aside={hidden > 0 ? `${hidden} below ${data.preferences.minSeverity} hidden` : 'Latest brief per repository'} hint="Unresolved issues from the latest completed brief of each repository, most severe first. Mark one fixed or dismissed from its report.">Open findings</SectionHead>
       <FindingFilters items={visible} value={filters} onChange={setFilters} />
-      <ol className="mt-4">
+      <ol className="mt-5">
         {visible.length === 0 && <Empty>No open findings.</Empty>}
         {visible.length > 0 && findings.length === 0 && <Empty>No open findings match these filters.</Empty>}
         {findings.map((f) => (
-          <li key={f.id} className="border-t border-rule first:border-t-0">
-            <Link to="/scans/$scanId" params={{ scanId: f.scan_id }} hash={`f-${f.id}`} className="group grid gap-1 py-4 sm:grid-cols-[6.5rem_1fr] sm:gap-4">
-              <span className="pt-1.5">
+          <li key={f.id}>
+            <Link to="/scans/$scanId" params={{ scanId: f.scan_id }} hash={`f-${f.id}`} className="group grid gap-1 py-3.5 sm:grid-cols-[6.5rem_1fr] sm:gap-4">
+              <span className="pt-1">
                 <Severity severity={f.severity} />
               </span>
               <span className="min-w-0">
-                <span className="block text-[19px] leading-[1.4] group-hover:underline group-hover:decoration-1 group-hover:underline-offset-4">{f.title}</span>
+                <span className="block text-[18px] leading-[1.3] group-hover:underline group-hover:decoration-1 group-hover:underline-offset-4">{f.title}</span>
                 <span className="mt-0.5 block truncate font-sans text-[12.5px] text-muted">
                   {f.repo}
                   {f.file && (
@@ -170,17 +170,18 @@ export function Brief({ data }: { data: DashboardData }) {
             New product
           </Link>
         }
+        hint="A product is a group of repositories reviewed and viewed together, like an API, its web app and its infrastructure. They share one memory: your answers, known facts and already-reviewed files carry across all of them."
       >
         Products
       </SectionHead>
-      <div className="mt-4 space-y-6">
+      <div className="mt-5 space-y-12">
         {data.products.length === 0 && <Empty>No products yet.</Empty>}
         {data.products.map((p) => (
-          <div key={p.id} className="relative border-t border-rule pt-4 first:border-t-0 first:pt-0">
+          <div key={p.id} className="relative">
             <Link to="/products/$productId" params={{ productId: p.id }} className="font-display text-[28px] leading-tight hover:underline hover:decoration-1 hover:underline-offset-4">
               {p.name}
             </Link>
-            <p className="mt-1 text-[17px] leading-[1.55] text-ink-3">
+            <p className="mt-1 text-[17px] leading-[1.45] text-ink-3">
               {plural(p.repos, 'repository', 'repositories')}
               {p.repos > 0 && (p.pushRepos === 0 ? ', none reviewed on push' : p.pushRepos === p.repos ? ', each reviewed on push' : `, ${p.pushRepos} reviewed on push`)}. Its memory holds{' '}
               {plural(p.memory.facts, 'fact')}, {plural(p.memory.reviewed, 'reviewed file')} and {plural(p.memory.verdicts, 'verdict')}.
@@ -190,7 +191,7 @@ export function Brief({ data }: { data: DashboardData }) {
         ))}
       </div>
 
-      <SectionHead aside="One review per product, one brief per repository">Earlier reviews</SectionHead>
+      <SectionHead hint="One review per product: each runs a brief per repository. Newest first, including reviews still in progress.">Earlier reviews</SectionHead>
       <ProductScans items={data.productScans} empty="No reviews yet." />
     </Page>
   )

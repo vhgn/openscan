@@ -1,10 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 import { userFromRequest } from '#/lib/session'
-import { first } from '#/lib/db'
 import { listProductScans, listScans } from '#/lib/queries'
 import { getProduct } from '#/lib/products'
-import { createScan, productIdForRepo, startProductScan } from '#/lib/scanner/engine'
+import { startProductScan } from '#/lib/scanner/engine'
+import { startScanFor } from '#/lib/actions'
 
 const body = z.union([
   z.object({ productId: z.string() }),
@@ -35,21 +35,9 @@ export const Route = createFileRoute('/api/scans/')({
           if (!started) return Response.json({ error: 'product_has_no_repositories' }, { status: 409 })
           return Response.json({ productScanId: started.id, scanIds: started.scanIds, url: `/products/${data.productId}` }, { status: 202 })
         }
-        const link = await first<{ full_name: string }>(
-          'SELECT r.full_name FROM user_repositories ur JOIN repositories r ON r.id = ur.repo_id WHERE ur.user_id = ? AND ur.repo_id = ?',
-          user.id,
-          data.repoId,
-        )
-        if (!link) return Response.json({ error: 'repo_not_found' }, { status: 404 })
-        if (data.kind === 'understand') {
-          const id = await createScan(user.id, data.repoId, 'understand', 'manual')
-          return Response.json({ id, url: `/scans/${id}` }, { status: 202 })
-        }
-        const productId = await productIdForRepo(user.id, data.repoId, link.full_name.split('/')[0])
-        const started = await startProductScan(user.id, productId, 'manual', { repoIds: [data.repoId] })
-        if (!started) return Response.json({ error: 'repo_not_in_product' }, { status: 409 })
-        const id = started.scanIds[0]
-        return Response.json({ id, productScanId: started.id, url: `/scans/${id}` }, { status: 202 })
+        const id = await startScanFor(user.id, data.repoId, data.kind)
+        if (!id) return Response.json({ error: 'repo_not_found' }, { status: 404 })
+        return Response.json({ id, url: `/scans/${id}` }, { status: 202 })
       },
     },
   },

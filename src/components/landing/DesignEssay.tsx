@@ -45,7 +45,7 @@ export function DesignEssay({ cta, secondary }: LandingProps) {
               never sees user input. The team skims it, fixes the two that look scary, and the rest becomes background noise until an auditor asks about it.
             </p>
 
-            <h2 className="pt-6 text-[13px] uppercase tracking-[0.2em] text-[#6f6f6a]">What changes</h2>
+            <h2 className="mb-3 pt-10 text-[13px] uppercase tracking-[0.2em] text-[#6f6f6a]">What changes</h2>
             <div className="relative">
               <p>
                 openscan reads your repositories the way an attacker would, then does something scanners never do:{' '}
@@ -67,7 +67,7 @@ export function DesignEssay({ cta, secondary }: LandingProps) {
               The goal is not more findings. It is fewer, truer ones, with a reason attached.
             </blockquote>
 
-            <h2 className="pt-6 text-[13px] uppercase tracking-[0.2em] text-[#6f6f6a]">What lands on your desk</h2>
+            <h2 className="mb-3 pt-10 text-[13px] uppercase tracking-[0.2em] text-[#6f6f6a]">What lands on your desk</h2>
             <p>Each week, or on every push if you prefer, a one-page brief that reads like this sample:</p>
             <ol className="list-none space-y-4 border-y border-[#141414]/15 py-6 text-[18px]">
               {[

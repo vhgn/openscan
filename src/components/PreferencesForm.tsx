@@ -54,10 +54,12 @@ function Question({ n, children }: { n: number; children: React.ReactNode }) {
 export const PREFERENCE_STEPS = 5
 
 /**
- * The preferences questionnaire, shared by onboarding and settings.
- * - Default: every question on one page with one Save button (settings).
- * - `stepped`: one question at a time (onboarding). Single-choice questions move on
- *   by themselves once an option is picked; the last step saves.
+ * The preferences questionnaire, shared by onboarding and settings, as a stepper:
+ * one question at a time under a row of numbered steps you can jump between.
+ * Single-choice questions move on by themselves once an option is picked.
+ * - `stepped`: the step lives with the caller (onboarding keeps it in the URL),
+ *   and only the last step saves.
+ * - Default (settings): the step is local, and Save is there on every step.
  */
 export function PreferencesForm({
   initial,
@@ -70,6 +72,9 @@ export function PreferencesForm({
   onSubmit: (p: Preferences) => Promise<void>
   stepped?: { index: number; onIndex: (i: number) => void }
 }) {
+  const [localIndex, setLocalIndex] = useState(0)
+  const nav = stepped ?? { index: localIndex, onIndex: setLocalIndex }
+  const saveAnytime = !stepped
   const [p, setP] = useState<Preferences>(initial)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -83,25 +88,24 @@ export function PreferencesForm({
   // In stepped mode, picking a single-choice answer moves on after the squiggle has drawn.
   const choose = <K extends 'frequency' | 'depth'>(k: K, v: Preferences[K]) => {
     set(k, v)
-    if (!stepped) return
     if (advance.current) clearTimeout(advance.current)
-    const at = stepped.index
-    advance.current = setTimeout(() => stepped.onIndex(at + 1), 550)
+    const at = nav.index
+    advance.current = setTimeout(() => nav.onIndex(at + 1), 550)
   }
 
-  const questions: Array<{ title: string; valid: boolean; body: React.ReactNode }> = [
+  const questions: Array<{ title: string; step: string; valid: boolean; body: React.ReactNode }> = [
     {
-      title: 'How often should a brief arrive?',
+      title: 'How often should a brief arrive?', step: 'Frequency',
       valid: true,
       body: <Choice name="frequency" value={p.frequency} options={FREQ} onChange={(v) => choose('frequency', v)} />,
     },
     {
-      title: 'How much research should stand behind it?',
+      title: 'How much research should stand behind it?', step: 'Depth',
       valid: true,
       body: <Choice name="depth" value={p.depth} options={DEPTH} onChange={(v) => choose('depth', v)} />,
     },
     {
-      title: 'What should we look at?',
+      title: 'What should we look at?', step: 'Scope',
       valid: p.focus.length > 0,
       body: (
         <>
@@ -126,7 +130,7 @@ export function PreferencesForm({
       ),
     },
     {
-      title: 'Who reads the brief, and what can they skip?',
+      title: 'Who reads the brief, and what can they skip?', step: 'Audience',
       valid: true,
       body: (
         <p className="mt-3 text-[18px] leading-[2.2]">
@@ -155,7 +159,7 @@ export function PreferencesForm({
       ),
     },
     {
-      title: 'Anything we should know about the product?',
+      title: 'Anything we should know about the product?', step: 'Context',
       valid: true,
       body: (
         <>
@@ -181,64 +185,78 @@ export function PreferencesForm({
     }
   }
 
-  if (stepped) {
-    const i = Math.min(Math.max(stepped.index, 0), questions.length - 1)
-    const q = questions[i]
-    const last = i === questions.length - 1
-    return (
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (!q.valid) return
-          if (last) void submit()
-          else stepped.onIndex(i + 1)
-        }}
-      >
-        <p className="label">
-          Question {i + 1} of {questions.length}
-        </p>
-        <div className="mt-2 flex gap-1.5" aria-hidden>
-          {questions.map((_, k) => (
-            <span key={k} className={`h-[2px] flex-1 transition-colors duration-300 ${k <= i ? 'bg-ink' : 'bg-rule'}`} />
-          ))}
-        </div>
-        {/* key: remount per question so it fades in */}
-        <div key={i} className="mt-8 animate-[fade-in_0.35s_ease-out]">
-          <Question n={i + 1}>{q.title}</Question>
-          {q.body}
-        </div>
-        <div className="mt-10 flex items-center gap-5">
+  const i = Math.min(Math.max(nav.index, 0), questions.length - 1)
+  const q = questions[i]
+  const last = i === questions.length - 1
+  const allValid = questions.every((x) => x.valid)
+  const go = (k: number) => {
+    if (advance.current) clearTimeout(advance.current)
+    nav.onIndex(k)
+  }
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (saveAnytime) {
+          if (allValid) void submit()
+          return
+        }
+        if (!q.valid) return
+        if (last) void submit()
+        else go(i + 1)
+      }}
+    >
+      {/* Stepper: a rule per step that fills as you go, with its number and name beneath. */}
+      <ol className="grid gap-x-3" style={{ gridTemplateColumns: `repeat(${questions.length}, minmax(0, 1fr))` }} aria-label="Questions">
+        {questions.map((x, k) => {
+          const state = k === i ? 'current' : k < i ? 'done' : 'todo'
+          return (
+            <li key={x.step}>
+              <button
+                type="button"
+                onClick={() => go(k)}
+                aria-current={k === i ? 'step' : undefined}
+                className={`group block w-full text-left font-sans text-[12.5px] ${state === 'current' ? 'text-ink' : state === 'done' ? 'text-ink-3 hover:text-ink' : 'text-faint hover:text-muted'}`}
+              >
+                <span className={`block h-[2px] transition-colors duration-300 ${state === 'todo' ? 'bg-rule group-hover:bg-faint' : 'bg-ink'}`} />
+                <span className="mt-2 flex items-baseline gap-1.5">
+                  <span className="font-display text-[18px] leading-none">{k + 1}</span>
+                  <span className="hidden truncate sm:inline">
+                    <Squiggle on={k === i}>{x.step}</Squiggle>
+                  </span>
+                </span>
+              </button>
+            </li>
+          )
+        })}
+      </ol>
+      {/* key: remount per question so it fades in */}
+      <div key={i} className="mt-10 animate-[fade-in_0.35s_ease-out]">
+        <Question n={i + 1}>{q.title}</Question>
+        {q.body}
+      </div>
+      <div className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-3">
+        {saveAnytime ? (
+          <>
+            <button className="btn" disabled={busy || !allValid}>
+              {busy ? 'Saving…' : submitLabel}
+            </button>
+            {!last && (
+              <button type="button" className="btn btn-quiet" disabled={!q.valid} onClick={() => go(i + 1)}>
+                Next →
+              </button>
+            )}
+          </>
+        ) : (
           <button className="btn" disabled={busy || !q.valid}>
             {last ? (busy ? 'Saving…' : submitLabel) : 'Next →'}
           </button>
-          {i > 0 && (
-            <button type="button" className="font-sans text-[13px] text-muted underline underline-offset-4 hover:text-ink" onClick={() => stepped.onIndex(i - 1)}>
-              ← Back
-            </button>
-          )}
-        </div>
-      </form>
-    )
-  }
-
-  return (
-    <form
-      className="space-y-12"
-      onSubmit={(e) => {
-        e.preventDefault()
-        void submit()
-      }}
-    >
-      {questions.map((q, i) => (
-        <div key={q.title}>
-          <Question n={i + 1}>{q.title}</Question>
-          {q.body}
-        </div>
-      ))}
-      <div className="flex items-center gap-4">
-        <button className="btn" disabled={busy || !p.focus.length}>
-          {busy ? 'Saving…' : submitLabel}
-        </button>
+        )}
+        {i > 0 && (
+          <button type="button" className="font-sans text-[13px] text-muted underline underline-offset-4 hover:text-ink" onClick={() => go(i - 1)}>
+            ← Back
+          </button>
+        )}
         {saved && <span className="font-sans text-[13px] text-muted">Saved.</span>}
       </div>
     </form>

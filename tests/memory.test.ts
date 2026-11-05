@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { factKey, priorVerdict, reviewTtlDays, sameClaim, titleSimilarity } from '../src/lib/memory-match.ts'
+import { factKey, priorVerdict, reviewTtlDays, sameClaim, similarQuestion, titleSimilarity } from '../src/lib/memory-match.ts'
 
 test('titleSimilarity tolerates LLM rewording of the same issue', () => {
   assert.ok(titleSimilarity('SQL injection in report filter query', 'Report filter query is vulnerable to SQL injection') >= 0.5)
@@ -30,4 +30,14 @@ test('priorVerdict reuses a verdict only for the same claim on identical code', 
   assert.equal(priorVerdict(mem, claim, 'def'), null, 'code changed → re-validate')
   assert.equal(priorVerdict(mem, claim, null), null)
   assert.equal(priorVerdict(mem, { ...claim, title: 'Hardcoded AWS key' }, 'abc'), null)
+})
+
+test('similarQuestion catches rewordings of skipped questions only', () => {
+  const skipped = ['Is this application reachable from the public internet?', 'Which ORM version does the API use?']
+  assert.equal(similarQuestion('Is the app reachable from the internet?', skipped), true)
+  assert.equal(similarQuestion('Is the API publicly reachable from the internet?', skipped), true)
+  assert.equal(similarQuestion('What ORM version is used by the API?', skipped), true)
+  assert.equal(similarQuestion('Does it store payment card data or other PII?', skipped), false)
+  assert.equal(similarQuestion('Is there an admin role separate from normal users?', skipped), false)
+  assert.equal(similarQuestion('anything', []), false)
 })

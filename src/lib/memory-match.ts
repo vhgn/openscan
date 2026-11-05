@@ -1,6 +1,6 @@
 /** Pure helpers for product memory matching (unit-tested). */
 
-const STOP = new Set(['a', 'an', 'the', 'in', 'of', 'to', 'and', 'or', 'is', 'are', 'via', 'with', 'for', 'on', 'by', 'from', 'can', 'be', 'without', 'mock'])
+const STOP = new Set(['a', 'an', 'the', 'in', 'of', 'to', 'and', 'or', 'is', 'are', 'via', 'with', 'for', 'on', 'by', 'from', 'can', 'be', 'without'])
 
 export function titleTokens(title: string): Set<string> {
   return new Set(
@@ -20,6 +20,39 @@ export function titleSimilarity(a: string, b: string): number {
   let inter = 0
   for (const w of A) if (B.has(w)) inter++
   return inter / (A.size + B.size - inter)
+}
+
+const Q_STOP = new Set(
+  'a an the is are was were be been do does did any this that these those it its of to in on for from with by as at or and not no what which who whom how when where why will would should can could there their they them you your app application project repo repository code service'.split(' '),
+)
+
+function questionTerms(q: string): Set<string> {
+  return new Set(
+    q
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !Q_STOP.has(w))
+      .map((w) => (w.length > 5 ? w.replace(/(ly|ing|ed|es|s)$/, '') : w)),
+  )
+}
+
+/**
+ * True when `q` asks essentially the same thing as one of `others` (word overlap
+ * of the shorter question's key terms). Used to stop re-asking skipped questions
+ * in different words. Pure.
+ */
+export function similarQuestion(q: string, others: string[]): boolean {
+  const a = questionTerms(q)
+  if (!a.size) return false
+  return others.some((o) => {
+    const b = questionTerms(o)
+    if (!b.size) return false
+    let shared = 0
+    for (const w of a) if (b.has(w)) shared++
+    const small = Math.min(a.size, b.size)
+    return small >= 2 ? shared / small >= 0.7 : shared === small && a.size === b.size
+  })
 }
 
 export function sameClaim(a: { title: string; file: string | null; category: string }, b: { title: string; file: string | null; category: string }): boolean {
