@@ -20,7 +20,7 @@ function Landing() {
     <div className="relative">
       {!design.approved && (
         <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full border border-black/10 bg-white px-4 py-2 text-sm text-stone-800 shadow-lg">
-          No landing design approved yet — showing option A (Console).{' '}
+          No landing design approved yet — showing Essay.{' '}
           <Link to="/design" className="font-semibold underline">
             Pick one on /design
           </Link>

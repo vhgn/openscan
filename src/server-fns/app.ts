@@ -79,7 +79,7 @@ export const getMe = createServerFn({ method: 'GET' }).handler(async () => {
 
 // ------------------------------------------------------------------ landing design
 
-export const DESIGNS = ['console', 'essay', 'guilloche'] as const
+export const DESIGNS = ['essay', 'guilloche'] as const
 export type DesignId = (typeof DESIGNS)[number]
 
 export const getDesign = createServerFn({ method: 'GET' }).handler(async () => {
