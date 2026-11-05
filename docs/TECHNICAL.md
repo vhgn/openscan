@@ -12,7 +12,6 @@ How to run, deploy and change openscan, and how it works inside. The short produ
 | **[PRODUCT.md](../PRODUCT.md)** | Product spec: audience, required flows, the chosen design (Essay), preferences, questions model, out of scope | You want to know what we're building and why |
 | **[SKILLS.md](../SKILLS.md)** | The agentic security skills the scanner uses (Trail of Bits, Cloudflare, Anthropic, NVIDIA, Cognition, OpenAI): which stage each runs in, how it's applied, licenses, and how to update them | You want to know *how* a scan reasons, or to change the methodology |
 | [`skills/vendor/`](../skills/vendor) | Verbatim copies of those skills, with upstream licenses and pinned commits (`SOURCES.md`) | Auditing or updating the methodology |
-| [`docs/design/`](./design) | The chosen Essay style: landing page and sample brief (also live on `/design`) | Seeing the design |
 | [`docs/screens/`](./screens) | Screenshots of landing → onboarding → brief → report → settings → product memory | Quick visual tour |
 | [`.dev.vars.example`](../.dev.vars.example) | Every secret and env var, with comments | Setting up your environment |
 
@@ -49,7 +48,7 @@ npm run dev
 
 Then open:
 
-1. **http://localhost:3000/**: the landing page (Essay style; `/design` shows the style and a sample brief).
+1. **http://localhost:3000/**: the landing page.
 2. **http://localhost:3000/api/dev/login?repos=OWASP/NodeGoat**: demo sign-in with any public repos (comma-separated). It drops you into onboarding.
 3. Select the repo, then either **Login with ChatGPT** (real AI) or **Skip** (deterministic heuristic engine), answer the preference questions, wait for reading, and land on the dashboard.
 
