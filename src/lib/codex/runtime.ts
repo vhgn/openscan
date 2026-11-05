@@ -1,10 +1,12 @@
 /** Wires the Codex Cloud client to openscan users, repos and AI_MODE. */
-import { aiMode } from '../env'
-import { first, now, run } from '../db'
+import { aiMode, appUrl } from '../env'
+import { all, first, now, run } from '../db'
 import { codexCredentials } from '../chatgpt'
 import { mockResponse } from '../ai/llm'
 import { createCodexClient, createMockCodexClient, pickEnvironment, type CodexClient } from './cloud'
 import type { UserRow } from '../types'
+import { attachTask, issueAgentToken, revokeAgentToken, setCodexNet, type AgentTokenRow } from './agent-tokens'
+import { probePrompt, settleProbe, type NetStatus } from './memory-api'
 
 let mockClient: CodexClient | undefined
 
@@ -45,4 +47,67 @@ export async function codexEnvironmentFor(userId: string, repo: { id: number; fu
     repo.id,
   )
   return env ? { id: env.id, label: env.label } : null
+}
+
+// ---------------------------------------------------------------- internet probe (settings)
+
+const PROBE_TTL_MS = 15 * 60_000
+
+/** The host the owner must allowlist in the Codex environment's internet settings. */
+export function openscanHost(): string {
+  try {
+    return new URL(appUrl()).host
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Codex does not expose an environment's internet setting through any API we can rely on,
+ * so we observe it: a tiny Ask-mode task curls /api/agent/ping with a 15-minute token.
+ */
+export async function startInternetProbe(user: Pick<UserRow, 'id' | 'chatgpt_cookie_enc'>, repo: { id: number; full_name: string; default_branch: string | null }): Promise<{ ok: true; taskId: string } | { ok: false; reason: string }> {
+  const client = await codexClientFor(user)
+  if (!client) return { ok: false, reason: 'Link ChatGPT first' }
+  const env = await codexEnvironmentFor(user.id, repo, client)
+  if (!env) return { ok: false, reason: `No Codex environment for ${repo.full_name}` }
+  const issued = await issueAgentToken({ userId: user.id, repoId: repo.id, productId: null, scanId: null, purpose: 'probe', ttlMs: PROBE_TTL_MS })
+  if (!issued) return { ok: false, reason: 'openscan has no public https URL (APP_URL), so Codex could never reach it' }
+  try {
+    const taskId = await client.createTask({ environmentId: env.id, branch: repo.default_branch || 'main', prompt: probePrompt(issued.api), qaMode: true })
+    await attachTask(issued.hash, taskId)
+    await setCodexNet(user.id, repo.id, 'checking')
+    return { ok: true, taskId }
+  } catch (e) {
+    await revokeAgentToken(issued.hash)
+    return { ok: false, reason: `Could not start the Codex task: ${String(e).slice(0, 160)}` }
+  }
+}
+
+/** Settles probes still marked 'checking' (called while the settings page polls). */
+export async function settleInternetProbes(user: Pick<UserRow, 'id' | 'chatgpt_cookie_enc'>): Promise<Record<number, NetStatus>> {
+  const pending = await all<{ repo_id: number }>(`SELECT repo_id FROM user_repositories WHERE user_id = ? AND codex_net = 'checking'`, user.id)
+  if (!pending.length) return {}
+  const client = await codexClientFor(user).catch(() => null)
+  const out: Record<number, NetStatus> = {}
+  for (const { repo_id } of pending) {
+    const tok = await first<AgentTokenRow>(
+      `SELECT * FROM agent_tokens WHERE user_id = ? AND repo_id = ? AND purpose = 'probe' ORDER BY created_at DESC LIMIT 1`,
+      user.id,
+      repo_id,
+    )
+    if (!tok) {
+      await run(`UPDATE user_repositories SET codex_net = NULL WHERE user_id = ? AND repo_id = ?`, user.id, repo_id)
+      continue
+    }
+    const task = tok.uses === 0 && tok.task_id && client ? await client.getTask(tok.task_id).catch(() => null) : null
+    const status = settleProbe({ uses: tok.uses, taskStatus: task?.status ?? null, createdAt: tok.created_at, now: now() })
+    if (status !== 'checking') {
+      await revokeAgentToken(tok.token_hash)
+      // A hit already marked the repo reachable; only record the negative outcome here.
+      if (status === 'unreachable') await setCodexNet(user.id, repo_id, 'unreachable')
+    }
+    out[repo_id] = status
+  }
+  return out
 }
