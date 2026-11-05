@@ -2,7 +2,7 @@
 
 > **openscan** (always lowercase) is an AI security reviewer for GitHub repositories. It reads your code like an attacker would and briefs you like a CISO: what matters, what is risky, what to do next.
 >
-> This file holds **what we want to build** (product requirements and decisions). The original customer brief is in [TASK.md](./TASK.md). How to run it is in [README.md](./README.md).
+> This file holds **what we want to build** (product requirements and decisions). The original customer brief is in [TASK.md](./TASK.md). How to run it is in [docs/TECHNICAL.md](./docs/TECHNICAL.md).
 
 ## Audience
 

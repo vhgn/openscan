@@ -1,4 +1,4 @@
-/** Write actions shared by the UI (server functions), the REST API and the MCP server. */
+/** Write actions shared by the UI (server functions) and the REST API. */
 import { first, now, run } from './db'
 import { productForRepo, rememberFacts } from './products'
 import { createScan, productIdForRepo, startProductScan } from './scanner/engine'

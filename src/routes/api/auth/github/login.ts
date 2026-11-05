@@ -2,13 +2,13 @@ import { createFileRoute } from '@tanstack/react-router'
 import { authorizeUrl, githubConfigured } from '#/lib/github/app'
 import { randomToken } from '#/lib/crypto'
 import { isDemoLoginEnabled } from '#/lib/env'
-import { safeNextPath } from '#/lib/oauth/core'
+import { safeNextPath } from '#/lib/redirect'
 
 export const Route = createFileRoute('/api/auth/github/login')({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        // ?next=/path: where to land after signing in (e.g. back to an MCP client's /oauth/authorize).
+        // ?next=/path: where to land after signing in.
         const next = safeNextPath(new URL(request.url).searchParams.get('next'))
         if (!githubConfigured()) {
           const to = isDemoLoginEnabled() ? `/api/dev/login${next ? `?next=${encodeURIComponent(next)}` : ''}` : '/?error=github_not_configured'

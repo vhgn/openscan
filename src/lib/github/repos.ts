@@ -42,7 +42,7 @@ export function repoUpsert(r: GhRepo, installationId: number | null): [string, A
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET installation_id = excluded.installation_id, full_name = excluded.full_name,
        default_branch = excluded.default_branch, private = excluded.private, html_url = excluded.html_url,
-       description = excluded.description, language = excluded.language, updated_at = excluded.updated_at`,
+       description = excluded.description, language = excluded.language, removed_at = NULL, updated_at = excluded.updated_at`,
     [r.id, installationId, r.full_name, r.default_branch, r.private ? 1 : 0, r.html_url, r.description, r.language, now(), now()],
   ]
 }

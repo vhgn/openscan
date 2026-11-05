@@ -8,7 +8,7 @@
 # account access token. Everything else (Cloudflare credentials, GitHub App
 # secrets, APP_URL, …) comes from Bitwarden through bitwarden/sm-action; the
 # secret-ID → env-var mapping is in the "Load secrets from Bitwarden" step.
-# See README → "Deploy with GitHub Actions".
+# See docs/TECHNICAL.md → "Deploy to Cloudflare".
 #
 # Optional repository variable (Settings → Secrets and variables → Actions → Variables):
 #   BWS_CLOUD_REGION  "eu" for vault.bitwarden.eu (default "us")
