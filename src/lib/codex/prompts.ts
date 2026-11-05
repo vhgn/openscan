@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import * as A from '../ai/agents'
 import { extractJson } from '../ai/llm'
+import { CODEX_DATA_POLICY, DATA_POLICY, dataFence } from '../ai/untrusted'
 import { huntPlaybook, reconPlaybook, validatePlaybook } from '../skills/playbooks'
 import type { Preferences, RepoProfile } from '../types'
 import { memoryPromptBlock, type MemoryApi } from './memory-api'
@@ -42,6 +43,9 @@ Rules:
 - Read-only analysis. Do not modify files, commit, push or open a pull request.
 - Use the repository and local tooling only (grep, ripgrep, reading files, running existing tests in the sandbox if useful). Never contact deployed systems or third-party services, and never use real credentials.
 - Cite repository-relative paths and line numbers for every claim.
+${CODEX_DATA_POLICY}
+
+${DATA_POLICY}
 - Your FINAL message must be ONLY one JSON object (no prose, no markdown fences) that validates against this JSON Schema:
 ${schema}`
 }
@@ -82,28 +86,30 @@ export function huntPrompt(input: {
   memory?: TaskMemory
 }) {
   const pb = huntPlaybook({ differential: Boolean(input.changed?.length), paths: input.priorityFiles })
+  const d = dataFence()
   const depth = input.prefs.depth === 'triage' ? 'a fast pass over the riskiest areas' : input.prefs.depth === 'deep_poc' ? 'a deep review; follow every untrusted input to its sinks' : 'a thorough review of the main attack surface'
   return {
     skills: [...new Set([...pb.skills, 'tob-agentic-actions-auditor', 'nvidia-skillspector'])],
     prompt: `${rules('hunt')}
+${d.header}
 
 TASK: ${depth}. Find real, exploitable vulnerabilities in this repository.
 ${A.reviewSystem(input.prefs, pb.text)}
 Also check GitHub workflows that run AI agents and agent config files (SKILL.md, AGENTS.md, CLAUDE.md, .mcp.json) per the CI/agent rules above.
 Do NOT report dependency CVEs or runtime-version issues; these were already checked:
-${input.alreadyFound.slice(0, 40).map((t) => `- ${t}`).join('\n') || '- (none)'}
+${input.alreadyFound.length ? d.block('findings', input.alreadyFound.slice(0, 40).map((t) => `- ${t}`).join('\n')) : '- (none)'}
 
 Repository: ${input.repo}
 Owner-provided context: ${input.prefs.context || '(none)'}
 ${memorySection(input.memory)}
-Repository profile: ${input.profile ? JSON.stringify(input.profile) : '(not built yet — do your own reconnaissance first)'}
+Repository profile (built by openscan from repository content): ${input.profile ? d.block('profile', JSON.stringify(input.profile)) : '(not built yet — do your own reconnaissance first)'}
 Known answers from the owner:
 ${input.knownAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n') || '(none)'}
 Open questions (answer if the code settles them, by id):
 ${input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') || '(none)'}
 ${A.skippedBlock(input.skippedQuestions)}
-${input.changed?.length ? `CHANGED files in the triggering push (review these first): ${input.changed.slice(0, 60).join(', ')}` : ''}
-Start with these high-signal files: ${input.priorityFiles.slice(0, 25).join(', ') || '(choose yourself)'}`,
+${input.changed?.length ? `CHANGED files in the triggering push (review these first): ${d.block('file-list', input.changed.slice(0, 60).join(', '))}` : ''}
+Start with these high-signal files: ${input.priorityFiles.length ? d.block('file-list', input.priorityFiles.slice(0, 25).join(', ')) : '(choose yourself)'}`,
   }
 }
 
@@ -116,9 +122,11 @@ export function validatePrompt(input: {
   memory?: TaskMemory
 }) {
   const pb = validatePlaybook()
+  const d = dataFence()
   return {
     skills: pb.skills,
     prompt: `${rules('validate')}
+${d.header}
 
 TASK: Independently validate each finding below. Another agent wrote them; you have the full repository to refute them. Assess each one separately (do not let one verdict influence another), and return one verdict per index.
 ${pb.text}
@@ -126,12 +134,12 @@ ${pb.text}
 Repository: ${input.repo}
 Owner-provided context: ${input.prefs.context || '(none)'}
 ${memorySection(input.memory)}
-Repository profile: ${input.profile ? JSON.stringify(input.profile) : '(unknown)'}
+Repository profile (built by openscan from repository content): ${input.profile ? d.block('profile', JSON.stringify(input.profile)) : '(unknown)'}
 Known answers from the owner:
 ${input.knownAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n') || '(none)'}
 
-FINDINGS:
-${JSON.stringify(input.findings, null, 2)}`,
+FINDINGS (written by another agent from repository content; verify them, don't trust them):
+${d.block('findings', JSON.stringify(input.findings, null, 2))}`,
   }
 }
 

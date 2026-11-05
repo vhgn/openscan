@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { z } from 'zod'
 import { askJson } from '../src/lib/ai/llm.ts'
 import * as A from '../src/lib/ai/agents.ts'
+import { DATA_POLICY, dataFence } from '../src/lib/ai/untrusted.ts'
 import { defaultPreferences } from '../src/lib/types.ts'
 import type { BackgroundLLM } from '../src/lib/chatgpt.ts'
 import { fakeModel, type LlmCall } from './helpers/llm.ts'
@@ -20,7 +21,7 @@ test('askJson: structured output on the first try, effort passed as a header', a
   const { llm, calls } = llmFrom(() => ({ answer: 42 }))
   assert.deepEqual(await askJson(llm, { system: 'sys', prompt: 'p', schema, effort: 'high' }), { answer: 42 })
   assert.equal(calls.length, 1)
-  assert.deepEqual([calls[0].system, calls[0].prompt, calls[0].effort, calls[0].json], ['sys', 'p', 'high', true])
+  assert.deepEqual([calls[0].system, calls[0].prompt, calls[0].effort, calls[0].json], [`sys\n\n${DATA_POLICY}`, 'p', 'high', true])
   await askJson(llm, { system: 'sys', prompt: 'p', schema })
   assert.equal(calls[1].effort, 'medium', 'default effort')
 })
@@ -31,7 +32,7 @@ test('askJson: falls back to plain text + tolerant JSON extraction when structur
   assert.deepEqual(await askJson(llm, { system: 'sys', prompt: 'p', schema }), { answer: 42 })
   assert.equal(calls.length, 2)
   assert.equal(calls[1].json, false, 'the retry is a plain text request')
-  assert.match(calls[1].system, /^sys\n\nRespond with ONLY a single JSON object/)
+  assert.ok(calls[1].system.startsWith(`sys\n\n${DATA_POLICY}\n\nRespond with ONLY a single JSON object`))
 })
 
 test('askJson: rejects when the retry does not match the schema either', async () => {
@@ -49,8 +50,11 @@ test('triagePrompt lists findings with verdict tags and truncated descriptions',
     profile: null,
     knownAnswers: [{ question: 'Public?', answer: 'Yes' }],
     findings: [triageFinding, { ...triageFinding, index: 1, title: 'Lib', file: null, verdict: null, description: 'short' }],
+    fence: dataFence('t0k3n'),
   })
-  assert.match(p, /^Repository: acme\/shop\nProfile: \(unknown\)\nKnown answers: Public\? -> Yes/)
+  assert.match(p, /^Data token for this message: t0k3n\./)
+  assert.match(p, /\nRepository: acme\/shop\nProfile \(built by openscan from repository content\): \(unknown\)\nKnown answers: Public\? -> Yes/)
+  assert.match(p, /<<<OPENSCAN-DATA t0k3n kind="findings">>>\n#0 /, 'findings sit in a data block')
   assert.match(p, /^#0 \[high\/code\/high\/validator:confirmed\] SQLi \(a\.ts\)\n {2}x{400}$/m)
   assert.match(p, /^#1 \[high\/code\/high\] Lib \(n\/a\)\n {2}short$/m)
   assert.match(A.triagePrompt({ repo: 'r', profile: null, knownAnswers: [], findings: [] }), /Known answers: \(none\)[\s\S]*\(no findings\)/)
@@ -69,10 +73,19 @@ test('reviewSystem carries the preferences', () => {
 })
 
 test('reviewPrompt marks files changed by the triggering push', () => {
-  const p = A.reviewPrompt({ repo: 'r', profile: null, knownAnswers: [], openQuestions: [{ id: 'q1', question: 'Q?' }], files: [{ path: 'a.ts', content: 'A' }, { path: 'b.ts', content: 'B' }], userContext: '', changed: ['b.ts'] })
-  assert.match(p, /CHANGED files in the triggering push: b\.ts/)
-  assert.match(p, /=== a\.ts ===\nA/)
-  assert.match(p, /=== b\.ts \(CHANGED\) ===\nB/)
+  const p = A.reviewPrompt({
+    repo: 'r',
+    profile: null,
+    knownAnswers: [],
+    openQuestions: [{ id: 'q1', question: 'Q?' }],
+    files: [{ path: 'a.ts', content: 'A' }, { path: 'b.ts', content: 'B' }],
+    userContext: '',
+    changed: ['b.ts'],
+    fence: dataFence('t0k3n'),
+  })
+  assert.match(p, /CHANGED files in the triggering push: <<<OPENSCAN-DATA t0k3n kind="file-list">>>\nb\.ts\n<<<END-OPENSCAN-DATA t0k3n>>>/)
+  assert.match(p, /<<<OPENSCAN-DATA t0k3n kind="file" path="a\.ts">>>\nA\n<<<END-OPENSCAN-DATA t0k3n>>>/)
+  assert.match(p, /<<<OPENSCAN-DATA t0k3n kind="file" path="b\.ts" changed="yes">>>\nB\n<<<END-OPENSCAN-DATA t0k3n>>>/)
   assert.match(p, /\[q1\] Q\?/)
 })
 

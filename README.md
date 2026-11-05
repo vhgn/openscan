@@ -51,6 +51,7 @@ The customer asked for three things, and each one shaped the product:
 | **Codex Cloud tasks** when a Codex environment exists | File batches only | The agent sees the whole repo, not the top 30 to 50 files. Uses undocumented endpoints; falls back to direct review. |
 | **Workers + D1 + Queues** (TypeScript, `nodejs_compat`) | A Node server with long jobs | One cheap deploy. Scans become small retryable steps, and a cron revives stalled ones. Not a plain Node process. |
 | **Validator agent** per serious finding | Reporting everything | Fewer false alarms; slower scans, more tokens. |
+| **Repositories treated as trusted input**, repository content still fenced as data in prompts | Hardening against hostile repositories | The user picks what to scan, the model only reads, and a misleading report reaches only that user, so prompt-injection risk is low. Every prompt still marks repository text as data, never instructions ([details](./docs/TECHNICAL.md#technical-decisions)). |
 
 ## What's mocked or unverified
 

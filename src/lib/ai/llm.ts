@@ -6,6 +6,7 @@
 import { Output, streamText } from 'ai'
 import type { z } from 'zod'
 import type { BackgroundLLM } from '../chatgpt'
+import { DATA_POLICY } from './untrusted'
 
 export function extractJson(text: string): unknown {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(text)
@@ -23,10 +24,12 @@ export async function askJson<S extends z.ZodTypeAny>(
   opts: { system: string; prompt: string; schema: S; effort?: 'low' | 'medium' | 'high' },
 ): Promise<z.infer<S>> {
   const headers = { 'x-login-with-chatgpt-reasoning-effort': opts.effort ?? 'medium' }
+  // Every call keeps repository content apart from instructions (see ./untrusted.ts).
+  const system = `${opts.system}\n\n${DATA_POLICY}`
   try {
     const result = streamText({
       model: llm.provider(llm.model),
-      system: opts.system,
+      system,
       prompt: opts.prompt,
       headers,
       output: Output.object({ schema: opts.schema }),
@@ -36,7 +39,7 @@ export async function askJson<S extends z.ZodTypeAny>(
     // Some models/accounts reject json_schema formatting: retry as plain text.
     const result = streamText({
       model: llm.provider(llm.model),
-      system: `${opts.system}\n\nRespond with ONLY a single JSON object. No prose, no markdown fences.`,
+      system: `${system}\n\nRespond with ONLY a single JSON object. No prose, no markdown fences.`,
       prompt: opts.prompt,
       headers,
     })

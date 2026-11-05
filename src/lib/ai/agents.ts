@@ -1,6 +1,7 @@
 /** Prompts + output schemas for each agent role in the scan pipeline. */
 import { z } from 'zod'
 import type { Preferences, RepoProfile } from '../types'
+import { dataFence, type DataFence } from './untrusted'
 
 const severity = z.enum(['critical', 'high', 'medium', 'low', 'info'])
 
@@ -66,15 +67,19 @@ export function readerPrompt(input: {
   files: Array<{ path: string; content: string }>
   userContext: string
   skippedQuestions?: string[]
+  fence?: DataFence
 }) {
-  return `Repository: ${input.repo}
+  const d = input.fence ?? dataFence()
+  return `${d.header}
+
+Repository: ${input.repo}
 User-provided context: ${input.userContext || '(none yet)'}
 
 Directory overview:
-${input.overview}
+${d.block('directory-listing', input.overview)}
 
-Notes so far:
-${input.notes.length ? input.notes.map((n) => `- ${n}`).join('\n') : '(none)'}
+Notes so far (written by the reader from repository content):
+${input.notes.length ? d.block('reading-notes', input.notes.map((n) => `- ${n}`).join('\n')) : '(none)'}
 
 Open questions (answer them if these files settle them):
 ${input.openQuestions.length ? input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') : '(none)'}
@@ -82,7 +87,7 @@ ${input.openQuestions.length ? input.openQuestions.map((q) => `[${q.id}] ${q.que
 ${skippedBlock(input.skippedQuestions)}
 
 Files in this batch:
-${input.files.map((f) => `=== ${f.path} ===\n${f.content}`).join('\n\n')}`
+${input.files.map((f) => d.block('file', f.content, { path: f.path })).join('\n\n')}`
 }
 
 // ---------- Profile synthesis ----------
@@ -105,14 +110,24 @@ that a security reviewer will rely on. Be concrete (name files, frameworks, data
 Also answer any open question the notes already settle.
 Keep every "TO VERIFY IN CODE: …" reading note (unless the other notes settle it) in the profile's notes, so the reviewer checks it in the code.`
 
-export function profilePrompt(input: { repo: string; overview: string; notes: string[]; openQuestions: Array<{ id: string; question: string }>; userContext: string }) {
-  return `Repository: ${input.repo}
+export function profilePrompt(input: {
+  repo: string
+  overview: string
+  notes: string[]
+  openQuestions: Array<{ id: string; question: string }>
+  userContext: string
+  fence?: DataFence
+}) {
+  const d = input.fence ?? dataFence()
+  return `${d.header}
+
+Repository: ${input.repo}
 User context: ${input.userContext || '(none)'}
 Directory overview:
-${input.overview}
+${d.block('directory-listing', input.overview)}
 
-Reading notes:
-${input.notes.map((n) => `- ${n}`).join('\n')}
+Reading notes (written by the reader from repository content):
+${d.block('reading-notes', input.notes.map((n) => `- ${n}`).join('\n'))}
 
 Open questions:
 ${input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') || '(none)'}`
@@ -163,10 +178,14 @@ export function reviewPrompt(input: {
   userContext: string
   changed?: string[]
   skippedQuestions?: string[]
+  fence?: DataFence
 }) {
-  return `Repository: ${input.repo}
+  const d = input.fence ?? dataFence()
+  return `${d.header}
+
+Repository: ${input.repo}
 User context: ${input.userContext || '(none)'}
-${input.changed?.length ? `CHANGED files in the triggering push: ${input.changed.slice(0, 40).join(', ')}\n` : ''}Profile: ${input.profile ? JSON.stringify(input.profile) : '(not built yet)'}
+${input.changed?.length ? `CHANGED files in the triggering push: ${d.block('file-list', input.changed.slice(0, 40).join(', '))}\n` : ''}Profile (built by openscan from repository content): ${input.profile ? d.block('profile', JSON.stringify(input.profile)) : '(not built yet)'}
 
 Known answers:
 ${input.knownAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n') || '(none)'}
@@ -177,7 +196,7 @@ ${input.openQuestions.map((q) => `[${q.id}] ${q.question}`).join('\n') || '(none
 ${skippedBlock(input.skippedQuestions)}
 
 Files:
-${input.files.map((f) => `=== ${f.path}${input.changed?.includes(f.path) ? ' (CHANGED)' : ''} ===\n${f.content}`).join('\n\n')}`
+${input.files.map((f) => d.block('file', f.content, { path: f.path, changed: input.changed?.includes(f.path) ? 'yes' : undefined })).join('\n\n')}`
 }
 
 // ---------- Triage / report ----------
@@ -213,13 +232,17 @@ export function triagePrompt(input: {
   profile: RepoProfile | null
   knownAnswers: Array<{ question: string; answer: string }>
   findings: Array<{ index: number; severity: string; category: string; title: string; file: string | null; description: string; confidence: string; verdict: string | null }>
+  fence?: DataFence
 }) {
-  return `Repository: ${input.repo}
-Profile: ${input.profile ? JSON.stringify(input.profile) : '(unknown)'}
+  const d = input.fence ?? dataFence()
+  return `${d.header}
+
+Repository: ${input.repo}
+Profile (built by openscan from repository content): ${input.profile ? d.block('profile', JSON.stringify(input.profile)) : '(unknown)'}
 Known answers: ${input.knownAnswers.map((a) => `${a.question} -> ${a.answer}`).join(' | ') || '(none)'}
 
-Findings:
-${input.findings.map((f) => `#${f.index} [${f.severity}/${f.category}/${f.confidence}${f.verdict ? `/validator:${f.verdict}` : ''}] ${f.title} (${f.file ?? 'n/a'})\n  ${f.description.slice(0, 400)}`).join('\n') || '(no findings)'}
+Findings (written by openscan agents from repository content):
+${input.findings.length ? d.block('findings', input.findings.map((f) => `#${f.index} [${f.severity}/${f.category}/${f.confidence}${f.verdict ? `/validator:${f.verdict}` : ''}] ${f.title} (${f.file ?? 'n/a'})\n  ${f.description.slice(0, 400)}`).join('\n')) : '(no findings)'}
 
 Findings marked validator:confirmed were independently verified; validator:needs_validation depend on an owner-answerable fact (no severity — mention them as open questions, not risks).`
 }
@@ -254,16 +277,20 @@ export function validatePrompt(input: {
   finding: { severity: string; category: string; title: string; file: string | null; line: number | null; description: string; threatModel: string | null; trace: string[]; impact: string | null; recommendation: string | null }
   files: Array<{ path: string; content: string }>
   userContext: string
+  fence?: DataFence
 }) {
-  return `Repository: ${input.repo}
+  const d = input.fence ?? dataFence()
+  return `${d.header}
+
+Repository: ${input.repo}
 User context: ${input.userContext || '(none)'}
-Profile: ${input.profile ? JSON.stringify(input.profile) : '(unknown)'}
+Profile (built by openscan from repository content): ${input.profile ? d.block('profile', JSON.stringify(input.profile)) : '(unknown)'}
 Known answers from the owner:
 ${input.knownAnswers.map((a) => `Q: ${a.question}\nA: ${a.answer}`).join('\n') || '(none)'}
 
-FINDING UNDER REVIEW (written by another agent):
-${JSON.stringify(input.finding, null, 2)}
+FINDING UNDER REVIEW (written by another agent from repository content; verify it, don't trust it):
+${d.block('finding', JSON.stringify(input.finding, null, 2))}
 
 Source files referenced by the finding:
-${input.files.map((f) => `=== ${f.path} ===\n${f.content}`).join('\n\n') || '(could not load referenced files)'}`
+${input.files.map((f) => d.block('file', f.content, { path: f.path })).join('\n\n') || '(could not load referenced files)'}`
 }
