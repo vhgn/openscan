@@ -25,8 +25,7 @@ import {
 } from '#/lib/products'
 import { uid } from '#/lib/db'
 import { answerQuestionFor, setFindingStatus, startScanFor } from '#/lib/actions'
-import { listMcpConnections, revokeMcpConnection } from '#/lib/oauth/server'
-import { appUrl, isDemoLoginEnabled } from '#/lib/env'
+import { isDemoLoginEnabled } from '#/lib/env'
 import { preferencesSchema, type OnboardingStep, type UserRow } from '#/lib/types'
 
 function publicUser(u: UserRow) {
@@ -339,20 +338,5 @@ export const forgetMemoryFn = createServerFn({ method: 'POST' })
     const user = await requireUser()
     if (!(await getProduct(user.id, data.productId))) throw new Error('Product not found')
     await forgetMemory(data.productId, data.memoryId, data.kind)
-    return { ok: true }
-  })
-
-// ------------------------------------------------------------------ MCP connections
-
-export const getMcpConnections = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await requireUser()
-  return { mcpUrl: `${appUrl()}/mcp`, connections: await listMcpConnections(user.id) }
-})
-
-export const revokeMcpConnectionFn = createServerFn({ method: 'POST' })
-  .validator(z.object({ id: z.string() }))
-  .handler(async ({ data }) => {
-    const user = await requireUser()
-    await revokeMcpConnection(user.id, data.id)
     return { ok: true }
   })

@@ -3,7 +3,7 @@
 SESSION_SECRET=replace-me-with-64-hex-chars
 LWC_SECRET=replace-me-with-64-hex-chars
 
-# GitHub App (https://github.com/settings/apps/new) — see README.md
+# GitHub App (https://github.com/settings/apps/new) — see docs/TECHNICAL.md
 GITHUB_APP_ID=123456
 GITHUB_CLIENT_ID=Iv23liXXXXXXXXXXXXXX
 GITHUB_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx

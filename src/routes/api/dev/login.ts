@@ -5,7 +5,7 @@ import { gh } from '#/lib/github/app'
 import { publicTree, repoUpsert, type GhRepo } from '#/lib/github/repos'
 import { createSession, sessionCookieHeader } from '#/lib/session'
 import { landingPathFor, upsertGithubUser } from '#/lib/users'
-import { safeNextPath } from '#/lib/oauth/core'
+import { safeNextPath } from '#/lib/redirect'
 
 /**
  * DEV ONLY (DEV_DEMO_LOGIN=1): signs in a fake GitHub user and links public
