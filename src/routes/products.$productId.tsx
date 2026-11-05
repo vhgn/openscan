@@ -1,6 +1,6 @@
 import { createFileRoute, useRouter } from '@tanstack/react-router'
 import { useState } from 'react'
-import { Empty, Lede, Margin, Page, SectionHead, plural, timeAgo } from '#/components/ui'
+import { Empty, Lede, Margin, Page, SectionHead, Squiggle, plural, timeAgo } from '#/components/ui'
 import { deleteProductFn, forgetMemoryFn, getProductPage, saveProductFn, scanProduct } from '#/server-fns/app'
 
 export const Route = createFileRoute('/products/$productId')({
@@ -78,7 +78,7 @@ function ProductPage() {
               onClick={async () => {
                 setBusy(true)
                 await scanProduct({ data: { productId: d.product!.id } })
-                await router.navigate({ to: '/dashboard' })
+                await router.navigate({ to: '/home' })
               }}
             >
               Review all {members.length}
@@ -88,7 +88,7 @@ function ProductPage() {
               onClick={async () => {
                 if (!confirm('Delete this product and its memory? Scans and findings are kept.')) return
                 await deleteProductFn({ data: { id: d.product!.id } })
-                await router.navigate({ to: '/dashboard' })
+                await router.navigate({ to: '/home' })
               }}
             >
               Delete product
@@ -113,8 +113,10 @@ function ProductPage() {
 
           <p className="mt-8 flex flex-wrap items-baseline gap-x-5 gap-y-2 font-sans text-[13px]">
             {(Object.keys(KIND_LABEL) as Array<keyof typeof KIND_LABEL>).map((k) => (
-              <button key={k} onClick={() => setTab(k)} className={tab === k ? 'squiggle font-medium text-ink' : 'text-muted hover:text-ink'}>
-                {KIND_LABEL[k]} ({d.memory.filter((m) => m.kind === k).length})
+              <button key={k} onClick={() => setTab(k)} className={tab === k ? 'font-medium text-ink' : 'text-muted hover:text-ink'}>
+                <Squiggle on={tab === k}>
+                  {KIND_LABEL[k]} ({d.memory.filter((m) => m.kind === k).length})
+                </Squiggle>
               </button>
             ))}
             {rows.length > 0 && (

@@ -13,7 +13,7 @@ export const Route = createFileRoute('/api/github/setup')({
         const user = await userFromRequest(request)
         if (!user) return new Response(null, { status: 302, headers: { location: '/api/auth/github/login' } })
         await syncUserRepos(user).catch((e) => console.error('repo sync failed', e))
-        const to = user.onboarding_step === 'done' ? '/dashboard?repos=updated' : '/onboarding?installed=1'
+        const to = user.onboarding_step === 'done' ? '/home?step=repos' : '/home'
         return new Response(null, { status: 302, headers: { location: to } })
       },
     },

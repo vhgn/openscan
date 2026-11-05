@@ -56,6 +56,37 @@ body {
     text-underline-offset: 6px;
     text-decoration-skip-ink: none;
   }
+  /*
+   * Animated squiggle for selection state. The wave is its own layer, so it can be
+   * revealed left to right when selected and wiped back out when deselected.
+   * Toggle with data-on="true|false" (see <Squiggle> in components/ui.tsx).
+   */
+  .squiggle-draw {
+    position: relative;
+    display: inline-block;
+  }
+  .squiggle-draw::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -0.3em;
+    height: 6px;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6' viewBox='0 0 12 6'%3E%3Cpath d='M0 3 Q3 0.2 6 3 T12 3' fill='none' stroke='%23e3c98b' stroke-width='1.8'/%3E%3C/svg%3E")
+      repeat-x left center / 12px 6px;
+    clip-path: inset(0 100% 0 0);
+    transition: clip-path 0.38s cubic-bezier(0.4, 0, 0.2, 1);
+    pointer-events: none;
+  }
+  .squiggle-draw[data-on='true']::after {
+    clip-path: inset(0 0 0 0);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .squiggle-draw::after {
+      transition: none;
+    }
+  }
+
   .link {
     text-decoration-line: underline;
     text-decoration-thickness: 1px;
@@ -139,6 +170,22 @@ body {
   }
 }
 
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[fade-in_0\.35s_ease-out\] {
+    animation: none;
+  }
+}
+
 @keyframes pulse-dot {
   0%,
   100% {
@@ -169,4 +216,136 @@ body {
 }
 .lwc-essay .lwc-btn:focus-visible {
   outline-color: var(--color-gold);
+}
+
+/* The rest of the widget: waiting state, device-code card, signed-in chip, consent, errors */
+.lwc-essay .lwc-root {
+  font-family: var(--font-sans);
+  align-items: flex-start;
+  width: 100%;
+  min-width: 0;
+}
+.lwc-essay .lwc-waiting,
+.lwc-essay .lwc-loading {
+  background: transparent;
+  color: var(--color-ink-3);
+  border-radius: 0;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 500;
+  justify-content: flex-start;
+}
+.lwc-essay .lwc-card {
+  width: 100%;
+  background: var(--color-wash);
+  border: 0;
+  border-left: 2px solid var(--color-gold);
+  border-radius: 0;
+  padding: 20px 24px;
+  color: var(--color-ink);
+  text-align: left;
+  gap: 10px;
+  backdrop-filter: none;
+}
+.lwc-essay .lwc-card-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--color-muted);
+}
+.lwc-essay .lwc-code-row {
+  justify-content: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.lwc-essay .lwc-code {
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--color-ink);
+}
+.lwc-essay .lwc-copy {
+  background: transparent;
+  color: var(--color-ink);
+  border: 0;
+  box-shadow: inset 0 0 0 1px rgb(20 20 20 / 0.35);
+  border-radius: 0;
+  padding: 0.35rem 0.8rem;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 600;
+}
+.lwc-essay .lwc-copy:hover {
+  background: rgb(20 20 20 / 0.05);
+  color: var(--color-ink);
+}
+.lwc-essay .lwc-copy[data-copied='true'] {
+  color: var(--color-ink);
+  box-shadow: inset 0 0 0 1px var(--color-gold);
+}
+.lwc-essay .lwc-copied-note {
+  justify-content: flex-start;
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--color-ink-2);
+}
+.lwc-essay .lwc-link {
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+.lwc-essay .lwc-link:hover {
+  text-decoration-thickness: 2px;
+}
+.lwc-essay .lwc-hint {
+  font-size: 12.5px;
+  color: var(--color-muted);
+}
+.lwc-essay .lwc-chip {
+  background: transparent;
+  border: 1px solid var(--color-rule);
+  border-radius: 0;
+  padding: 8px 10px;
+  color: var(--color-ink);
+}
+.lwc-essay .lwc-avatar {
+  background: var(--color-ink);
+  color: var(--color-paper);
+}
+.lwc-essay .lwc-identity-plan {
+  color: var(--color-muted);
+}
+.lwc-essay .lwc-disconnect {
+  color: var(--color-muted);
+  border-radius: 0;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.lwc-essay .lwc-disconnect:hover {
+  color: var(--color-ink);
+  background: transparent;
+}
+.lwc-essay .lwc-error {
+  color: var(--color-alarm);
+}
+.lwc-essay .lwc-consent {
+  max-width: none;
+}
+.lwc-essay .lwc-consent-title {
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--color-ink);
+}
+.lwc-essay .lwc-consent-list li {
+  color: var(--color-ink-3);
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule);
+  border-radius: 0;
 }

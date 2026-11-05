@@ -6,7 +6,7 @@ import { z } from 'zod'
 import { all, batch, first, now, run } from '#/lib/db'
 import { currentUser, requireUser } from '#/lib/session'
 import { installUrl, manageInstallationUrl, githubConfigured } from '#/lib/github/app'
-import { listUserRepos, syncUserRepos } from '#/lib/github/repos'
+import { listInstallTargets, listUserRepos, syncUserRepos } from '#/lib/github/repos'
 import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
 import { createScan, loadPreferences } from '#/lib/scanner/engine'
 import { listFindings, listQuestions, listScans, scanDetail } from '#/lib/queries'
@@ -79,8 +79,7 @@ export const getMe = createServerFn({ method: 'GET' }).handler(async () => {
 
 // ------------------------------------------------------------------ onboarding
 
-export const getOnboarding = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await authed()
+async function onboardingData(user: UserRow) {
   const installations = await all<{ id: number; account_login: string; account_type: string; repository_selection: string | null }>(
     `SELECT i.* FROM installations i JOIN user_installations ui ON ui.installation_id = i.id WHERE ui.user_id = ?`,
     user.id,
@@ -106,8 +105,16 @@ export const getOnboarding = createServerFn({ method: 'GET' }).handler(async () 
     hasPreferences: Boolean(await first('SELECT 1 FROM preferences WHERE user_id = ?', user.id)),
     productName: (await listProducts(user.id))[0]?.name ?? null,
   }
+}
+
+export const getOnboarding = createServerFn({ method: 'GET' }).handler(async () => onboardingData(await authed()))
+export type OnboardingData = Awaited<ReturnType<typeof onboardingData>>
+
+/** Accounts and organizations the GitHub App can be installed on (fetched on demand, not on every poll). */
+export const getInstallTargets = createServerFn({ method: 'GET' }).handler(async () => {
+  const user = await authed()
+  return listInstallTargets(user)
 })
-export type OnboardingData = Awaited<ReturnType<typeof getOnboarding>>
 
 export const refreshRepos = createServerFn({ method: 'POST' }).handler(async () => {
   const user = await requireUser()
@@ -213,9 +220,7 @@ export const dismissQuestion = createServerFn({ method: 'POST' })
 
 // ------------------------------------------------------------------ dashboard & scans
 
-export const getDashboard = createServerFn({ method: 'GET' }).handler(async () => {
-  const user = await authed()
-  if (user.onboarding_step !== 'done') throw redirect({ to: '/onboarding' })
+async function dashboardData(user: UserRow) {
   const repos = (await listUserRepos(user.id)).filter((r) => r.selected)
   return {
     user: publicUser(user),
@@ -229,15 +234,27 @@ export const getDashboard = createServerFn({ method: 'GET' }).handler(async () =
     questions: await listQuestions(user.id, ['open']),
     preferences: await loadPreferences(user.id),
   }
-})
-export type DashboardData = Awaited<ReturnType<typeof getDashboard>>
+}
+
+/**
+ * Everything `/home` needs in one call: the setup steps until onboarding is done
+ * (or when the user asks to change repositories), the brief afterwards.
+ */
+export const getHome = createServerFn({ method: 'GET' })
+  .validator(z.object({ setup: z.boolean().default(false) }))
+  .handler(async ({ data }) => {
+    const user = await authed()
+    if (data.setup || user.onboarding_step !== 'done') return { kind: 'setup' as const, data: await onboardingData(user) }
+    return { kind: 'brief' as const, data: await dashboardData(user) }
+  })
+export type DashboardData = Awaited<ReturnType<typeof dashboardData>>
 
 export const getScan = createServerFn({ method: 'GET' })
   .validator(z.object({ id: z.string() }))
   .handler(async ({ data }) => {
     const user = await authed()
     const detail = await scanDetail(user.id, data.id)
-    if (!detail) throw redirect({ to: '/dashboard' })
+    if (!detail) throw redirect({ to: '/home' })
     return { ...detail, user: publicUser(user) }
   })
 
@@ -290,7 +307,7 @@ export const getProductPage = createServerFn({ method: 'GET' })
     const user = await authed()
     const isNew = data.id === 'new'
     const product = isNew ? null : await getProduct(user.id, data.id)
-    if (!isNew && !product) throw redirect({ to: '/dashboard' })
+    if (!isNew && !product) throw redirect({ to: '/home' })
     const members = product ? await productRepoIds(product.id) : []
     const repos = await listUserRepos(user.id)
     const owners = new Map<number, string>()

@@ -1,5 +1,5 @@
 /** Repository data access used by onboarding, webhooks and the scanner. */
-import { gh, GitHubError, installationToken, userToken } from './app'
+import { gh, GitHubError, installationToken, installUrlFor, manageInstallationUrl, userToken } from './app'
 import { all, batch, first, now, run } from '../db'
 import type { RepoRow, UserRow } from '../types'
 
@@ -85,6 +85,51 @@ export async function syncUserRepos(user: UserRow): Promise<void> {
     [user.id, ...seenRepoIds],
   ])
   await batch(ops)
+}
+
+export interface InstallTarget {
+  id: number
+  login: string
+  type: 'User' | 'Organization'
+  avatarUrl: string | null
+  /** Set when our app is already installed on this account. */
+  installationId: number | null
+  installUrl: string
+  manageUrl: string | null
+}
+
+/**
+ * Where the user can install the app: their personal account plus every
+ * organization they belong to, each marked installed or not. Organizations come
+ * from GET /user/orgs with the user's token; if GitHub hides some memberships,
+ * the UI also offers GitHub's own account picker.
+ */
+export async function listInstallTargets(user: UserRow): Promise<InstallTarget[]> {
+  const token = await userToken(user)
+  const orgs = token ? await gh<Array<{ id: number; login: string; avatar_url: string | null }>>('/user/orgs?per_page=100', token).catch(() => []) : []
+  const installs = await all<{ id: number; account_login: string; account_type: string }>(
+    `SELECT i.id, i.account_login, i.account_type FROM installations i JOIN user_installations ui ON ui.installation_id = i.id WHERE ui.user_id = ?`,
+    user.id,
+  )
+  const accounts: Array<Pick<InstallTarget, 'id' | 'login' | 'type' | 'avatarUrl'>> = [
+    { id: user.github_id, login: user.login, type: 'User', avatarUrl: user.avatar_url },
+    ...orgs.map((o) => ({ id: o.id, login: o.login, type: 'Organization' as const, avatarUrl: o.avatar_url })),
+  ]
+  // Installations on accounts GitHub didn't list (e.g. a private org membership).
+  for (const i of installs) {
+    if (!accounts.some((a) => a.login.toLowerCase() === i.account_login.toLowerCase())) {
+      accounts.push({ id: 0, login: i.account_login, type: i.account_type === 'Organization' ? 'Organization' : 'User', avatarUrl: null })
+    }
+  }
+  return accounts.map((a) => {
+    const inst = installs.find((i) => i.account_login.toLowerCase() === a.login.toLowerCase())
+    return {
+      ...a,
+      installationId: inst?.id ?? null,
+      installUrl: installUrlFor(a.id),
+      manageUrl: inst ? manageInstallationUrl(inst.id, inst.account_type, inst.account_login) : null,
+    }
+  })
 }
 
 export interface UserRepoView extends RepoRow {

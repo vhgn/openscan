@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { DesignEssay } from '#/components/landing/DesignEssay'
 import { ReportEssay } from '#/components/report-designs/ReportEssay'
 import { SAMPLE_REPORT } from '#/components/report-designs/sample'
-import { Lede, Page, SectionHead, Title } from '#/components/ui'
+import { Lede, Page, SectionHead, Squiggle, Title } from '#/components/ui'
 import { getMe } from '#/server-fns/app'
 
 type View = 'landing' | 'report'
@@ -33,11 +33,11 @@ function DesignRecord() {
             ← Design
           </a>
           <span className="text-faint">|</span>
-          <a href="/design?view=landing" className={view === 'landing' ? 'squiggle' : 'text-muted hover:text-ink'}>
-            Landing
+          <a href="/design?view=landing" className={view === 'landing' ? 'text-ink' : 'text-muted hover:text-ink'}>
+            <Squiggle on={view === 'landing'}>Landing</Squiggle>
           </a>
-          <a href="/design?view=report" className={view === 'report' ? 'squiggle' : 'text-muted hover:text-ink'}>
-            Sample brief
+          <a href="/design?view=report" className={view === 'report' ? 'text-ink' : 'text-muted hover:text-ink'}>
+            <Squiggle on={view === 'report'}>Sample brief</Squiggle>
           </a>
         </div>
         {view === 'report' ? <ReportEssay data={SAMPLE_REPORT} /> : <DesignEssay cta={CTA} />}

@@ -12,12 +12,21 @@ export interface MastheadUser {
   avatarUrl: string | null
 }
 
+/** Text with a squiggle that draws in when `on` becomes true and wipes out when it turns false. */
+export function Squiggle({ on, children, className = '' }: { on: boolean; children: ReactNode; className?: string }) {
+  return (
+    <span className={`squiggle-draw ${className}`} data-on={on}>
+      {children}
+    </span>
+  )
+}
+
 export function Wordmark({ className = '' }: { className?: string }) {
   return <span className={`font-display text-[24px] leading-none ${className}`}>openscan</span>
 }
 
 const NAV = [
-  { to: '/dashboard', label: 'Brief' },
+  { to: '/home', label: 'Brief' },
   { to: '/skills', label: 'Methods' },
   { to: '/settings', label: 'Settings' },
 ] as const
@@ -27,7 +36,7 @@ export function Masthead({ user, crumb, nav = true }: { user?: MastheadUser | nu
   return (
     <header className="border-b border-rule">
       <nav className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-4 font-sans text-[13px]">
-        <Link to={user ? '/dashboard' : '/'} className="text-ink">
+        <Link to={user ? '/home' : '/'} className="text-ink">
           <Wordmark />
         </Link>
         {crumb && (
@@ -40,8 +49,8 @@ export function Masthead({ user, crumb, nav = true }: { user?: MastheadUser | nu
           {nav &&
             user &&
             NAV.map((n) => (
-              <Link key={n.to} to={n.to} className="hover:text-ink" activeProps={{ className: 'text-ink squiggle' }}>
-                {n.label}
+              <Link key={n.to} to={n.to} className="hover:text-ink" activeProps={{ className: 'text-ink' }}>
+                {({ isActive }) => <Squiggle on={isActive}>{n.label}</Squiggle>}
               </Link>
             ))}
           {user && (

@@ -8,7 +8,7 @@ import { disconnectChatGPT, getOnboarding, refreshCodexEnvironments, savePrefere
 export const Route = createFileRoute('/settings')({
   loader: async () => {
     const data = await getOnboarding()
-    if (data.step !== 'done') throw redirect({ to: '/onboarding' })
+    if (data.step !== 'done') throw redirect({ to: '/home' })
     return data
   },
   head: () => ({ meta: [{ title: 'Settings — openscan' }] }),
@@ -28,7 +28,7 @@ function Settings() {
       <Title>How openscan works for you.</Title>
       <Lede>What it reads, whose ChatGPT it thinks with, and what the brief looks like.</Lede>
 
-      <SectionHead aside={<Link to="/onboarding" search={{ step: 'repos' }} className="link">Change</Link>}>Repositories</SectionHead>
+      <SectionHead aside={<Link to="/home" search={{ step: 'repos' }} className="link">Change</Link>}>Repositories</SectionHead>
       <p className="mt-4 text-[18px] leading-[1.6]">
         Watching {plural(selected.length, 'repository', 'repositories')}
         {data.productName ? (

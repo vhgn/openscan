@@ -1,6 +1,7 @@
 /** Read models shared by server functions and the REST API. */
 import { all, first, parseJson } from './db'
 import type { RepoProfile, ScanRow, ScanSummary } from './types'
+import { areasFor, type AreaId } from './scanner/areas'
 
 export interface ScanListItem {
   id: string
@@ -72,13 +73,15 @@ export interface FindingView {
   threat_model: string | null
   source: string | null
   skills_json: string | null
+  /** Derived product areas (Auth, Payments, …) for filtering; not stored. */
+  areas: AreaId[]
 }
 
-export function listFindings(userId: string, opts: { scanId?: string; limit?: number } = {}) {
+export async function listFindings(userId: string, opts: { scanId?: string; limit?: number } = {}) {
   const where = opts.scanId ? 'f.scan_id = ?' : `f.status = 'open' AND f.scan_id IN (
       SELECT s.id FROM scans s WHERE s.user_id = ? AND s.kind = 'security' AND s.status = 'completed'
       AND s.created_at = (SELECT MAX(s2.created_at) FROM scans s2 WHERE s2.repo_id = s.repo_id AND s2.user_id = s.user_id AND s2.kind = 'security' AND s2.status = 'completed'))`
-  return all<FindingView>(
+  const rows = await all<Omit<FindingView, 'areas'>>(
     `SELECT f.*, r.full_name AS repo FROM findings f JOIN repositories r ON r.id = f.repo_id
      WHERE f.user_id = ? AND ${where}
      ORDER BY CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
@@ -88,6 +91,7 @@ export function listFindings(userId: string, opts: { scanId?: string; limit?: nu
     opts.scanId ?? userId,
     opts.limit ?? 200,
   )
+  return rows.map((f): FindingView => ({ ...f, areas: areasFor(f) }))
 }
 
 export interface QuestionView {

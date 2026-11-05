@@ -2,6 +2,7 @@ import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { useEffect } from 'react'
 import { Empty, ErrorNote, Lede, Margin, Page, Progress, SectionHead, Severity, StatusMark, Title, Verdict, phaseLabel, spell, timeAgo } from '#/components/ui'
 import { QuestionCard } from '#/components/QuestionCard'
+import { FindingFilters, applyFindingFilters, isArea, isLevel, type FindingFilterState } from '#/components/FindingFilters'
 import { getScan, updateFindingStatus } from '#/server-fns/app'
 import type { RepoProfile, ScanSummary } from '#/lib/types'
 import { SKILL_BY_ID } from '#/lib/skills/registry'
@@ -34,6 +35,11 @@ function engineLabel(engine: string | null, model: string | null) {
 }
 
 export const Route = createFileRoute('/scans/$scanId')({
+  // Finding filters live in the URL so a filtered brief can be shared.
+  validateSearch: (q: Record<string, unknown>): FindingFilterState => ({
+    ...(isLevel(q.level) ? { level: q.level } : {}),
+    ...(isArea(q.area) ? { area: q.area } : {}),
+  }),
   loader: ({ params }) => getScan({ data: { id: params.scanId } }),
   head: () => ({ meta: [{ title: 'Security brief — openscan' }] }),
   component: ScanPage,
@@ -41,6 +47,8 @@ export const Route = createFileRoute('/scans/$scanId')({
 
 function ScanPage() {
   const d = Route.useLoaderData()
+  const filters = Route.useSearch()
+  const navigate = Route.useNavigate()
   const router = useRouter()
   const s = d.scan
   const live = s.status === 'queued' || s.status === 'running'
@@ -52,7 +60,9 @@ function ScanPage() {
 
   const summary = s.kind === 'security' && s.summary?.headline ? (s.summary as ScanSummary) : null
   const profile: RepoProfile | null = (s.kind === 'understand' ? (s.summary?.profile ?? d.profile) : d.profile) ?? null
-  const open = d.findings.filter((f) => f.status === 'open')
+  const openAll = d.findings.filter((f) => f.status === 'open')
+  const open = applyFindingFilters(openAll, filters)
+  const filtered = Boolean(filters.level || filters.area)
   const closed = d.findings.filter((f) => f.status !== 'open')
   const date = new Date(s.finished_at ?? s.created_at).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
   const v = summary?.validation
@@ -89,7 +99,7 @@ function ScanPage() {
             <StatusMark status={s.status} /> {phaseLabel(s.phase)} · {s.progress}%
           </div>
           <Progress value={s.progress} />
-          <p className="mt-3 text-[16px] italic text-muted">This page updates by itself. You can leave; the brief will be on your dashboard.</p>
+          <p className="mt-3 text-[16px] italic text-muted">This page updates by itself. You can leave; the brief will be on your home page.</p>
         </div>
       )}
       {s.status === 'failed' && <ErrorNote>Failed: {s.error}</ErrorNote>}
@@ -211,9 +221,18 @@ function ScanPage() {
       {/* findings */}
       {s.kind === 'security' && (
         <>
-          <SectionHead aside={open.length ? `${open.length} open` : undefined}>Findings, in the order we would fix them</SectionHead>
+          <SectionHead aside={openAll.length ? (filtered ? `${open.length} of ${openAll.length} open` : `${openAll.length} open`) : undefined}>Findings, in the order we would fix them</SectionHead>
+          <FindingFilters items={openAll} value={filters} onChange={(v) => navigate({ search: v, replace: true, resetScroll: false })} />
           <div className="mt-6 space-y-12">
-            {open.length === 0 && !live && <Empty>No open findings. Nothing here needs your attention.</Empty>}
+            {openAll.length === 0 && !live && <Empty>No open findings. Nothing here needs your attention.</Empty>}
+            {openAll.length > 0 && open.length === 0 && (
+              <p className="text-[17px] italic text-muted">
+                No open findings match.{' '}
+                <button className="not-italic font-sans text-[13px] underline underline-offset-4 hover:text-ink" onClick={() => navigate({ search: {}, replace: true, resetScroll: false })}>
+                  Clear filters
+                </button>
+              </p>
+            )}
             {open.map((f, i) => {
               const trace = parseList(f.trace_json)
               return (
@@ -376,7 +395,7 @@ function ScanPage() {
           </ol>
         </details>
         <p className="mt-4">
-          <Link to="/dashboard" className="underline underline-offset-2 hover:text-ink">
+          <Link to="/home" className="underline underline-offset-2 hover:text-ink">
             ← Back to the brief
           </Link>{' '}
           · started {timeAgo(s.created_at)}

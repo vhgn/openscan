@@ -58,19 +58,22 @@ export function QuestionCard({ q, compact = false }: { q: QuestionLike; compact?
         }}
       >
         <input className={`field min-w-[12rem] flex-1 ${compact ? 'text-[15px]' : ''}`} value={text} onChange={(e) => setText(e.target.value)} placeholder="Your answer…" aria-label="Your answer" />
-        <button className="btn btn-sm" disabled={busy || !text.trim()}>
-          {busy ? 'Saving…' : 'Save'}
-        </button>
-        <button
-          type="button"
-          className="font-sans text-[12px] text-muted underline underline-offset-4 hover:text-ink"
-          onClick={async () => {
-            await dismissQuestion({ data: { id: q.id } })
-            await router.invalidate()
-          }}
-        >
-          skip
-        </button>
+        {/* Save and skip share a row, so skip lines up with the button text. */}
+        <span className="flex items-center gap-3">
+          <button className="btn btn-sm" disabled={busy || !text.trim()}>
+            {busy ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            type="button"
+            className="font-sans text-[12px] text-muted underline underline-offset-4 hover:text-ink"
+            onClick={async () => {
+              await dismissQuestion({ data: { id: q.id } })
+              await router.invalidate()
+            }}
+          >
+            skip
+          </button>
+        </span>
       </form>
     </div>
   )

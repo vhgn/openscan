@@ -100,6 +100,14 @@ export function installUrl(state?: string): string {
   return u.toString()
 }
 
+/** Install link that skips GitHub's account picker and goes straight to one account or organization. */
+export function installUrlFor(targetId: number): string {
+  if (targetId <= 0) return installUrl()
+  const u = new URL(`https://github.com/apps/${str('GITHUB_APP_SLUG') || 'openscan'}/installations/new/permissions`)
+  u.searchParams.set('target_id', String(targetId))
+  return u.toString()
+}
+
 export function manageInstallationUrl(installationId: number, accountType: string, accountLogin: string): string {
   return accountType === 'Organization'
     ? `https://github.com/organizations/${accountLogin}/settings/installations/${installationId}`

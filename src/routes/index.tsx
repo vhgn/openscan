@@ -12,7 +12,7 @@ export const Route = createFileRoute('/')({
 function Landing() {
   const me = Route.useLoaderData()
   const cta = me.user
-    ? { href: me.user.onboardingStep === 'done' ? '/dashboard' : '/onboarding', label: me.user.onboardingStep === 'done' ? 'Open your brief' : 'Continue setup' }
+    ? { href: '/home', label: me.user.onboardingStep === 'done' ? 'Open your brief' : 'Continue setup' }
     : { href: '/api/auth/github/login', label: 'Connect GitHub — it’s free' }
   return <DesignEssay cta={cta} secondary={{ href: '/design?view=report', label: 'See a sample brief' }} />
 }

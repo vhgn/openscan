@@ -21,6 +21,7 @@ export async function upsertGithubUser(gh: { id: number; login: string; name: st
   return (await first<UserRow>('SELECT * FROM users WHERE id = ?', id))!
 }
 
-export function landingPathFor(user: Pick<UserRow, 'onboarding_step'>): string {
-  return user.onboarding_step === 'done' ? '/dashboard' : '/onboarding'
+/** Where signed-in users land: /home shows setup until onboarding is done, then the brief. */
+export function landingPathFor(_user?: Pick<UserRow, 'onboarding_step'>): string {
+  return '/home'
 }

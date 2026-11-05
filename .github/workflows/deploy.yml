@@ -1,7 +1,7 @@
 # CI + deploy to Cloudflare Workers.
 #
 # Every push and pull request: typecheck, unit tests, production build (no secrets).
-# Push to the default branch (or "Run workflow"): load secrets from Bitwarden
+# Push to main (or "Run workflow" on main): load secrets from Bitwarden
 # Secrets Manager, make sure D1 + the queue exist, apply D1 migrations, deploy.
 #
 # The only GitHub secret is BWS_ACCESS_TOKEN: a Bitwarden Secrets Manager machine
@@ -44,7 +44,8 @@ jobs:
   deploy:
     name: Deploy to Cloudflare
     needs: check
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_name == github.event.repository.default_branch)
+    # Production deploys come only from main (a push, or "Run workflow" on main).
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production
