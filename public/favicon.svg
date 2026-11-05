@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- openscan: an ink serif "o" (thick sides, thin top and bottom) over the cream squiggle -->
+  <rect width="64" height="64" rx="14" fill="#fbfbf9"/>
+  <path fill="#141414" fill-rule="evenodd" d="M15 27.5a17 15.5 0 1 0 34 0a17 15.5 0 1 0 -34 0Z M25.4 27.5a6.6 13 0 1 0 13.2 0a6.6 13 0 1 0 -13.2 0Z"/>
+  <path fill="none" stroke="#c9a14f" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" d="M11 53.5c3.6-4.4 7.2-4.4 10.8 0s7.2 4.4 10.8 0 7.2-4.4 10.8 0 7.2 4.4 10.6 0"/>
+</svg>
