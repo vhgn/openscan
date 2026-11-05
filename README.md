@@ -57,7 +57,8 @@ The customer asked for three things, and each one shaped the product:
 - **Demo login** (`/api/dev/login`, `DEV_DEMO_LOGIN=1`, forced off in production) signs in a fake user with public repos.
 - **Without ChatGPT**, the **heuristic engine** runs: real deterministic rules, OSV.dev and known-CVE checks, no AI. That is the "mocked scan" the brief allowed. Nothing returns made-up AI output.
 - **Verified end to end:** demo login through onboarding, both scan kinds with real OSV results, dashboard, report, REST API, cron, production build.
-- **Not verified (needs real accounts):** ChatGPT device-login approval and AI scans, Codex Cloud, GitHub App install, webhooks.
+- **Verified manually** by the owner across different repositories and accounts: ChatGPT device-login approval and AI scans, GitHub App install and sign-in, and webhooks.
+- **Not verified:** the Codex Cloud path, which still needs a real Codex environment.
 
 ## What we cut, and why
 
