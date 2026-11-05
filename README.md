@@ -116,6 +116,34 @@ Then open:
 
 ## Deploy to Cloudflare
 
+### With GitHub Actions (recommended)
+
+[`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml) runs on every push and pull request:
+
+- **check** (no secrets): `npm ci`, typecheck, unit tests, production build.
+- **deploy** (pushes to the default branch, or *Run workflow*): loads secrets from **Bitwarden Secrets Manager** with Bitwarden's [`bitwarden/sm-action`](https://github.com/bitwarden/sm-action), creates the D1 database and queue if they don't exist (`scripts/ci/provision.mjs`), applies D1 migrations, builds, and runs `wrangler deploy` with the Worker secrets (`--secrets-file`) and production vars (`--var`) in one step (`scripts/ci/worker-secrets.mjs`). `DEV_DEMO_LOGIN` is always forced to `0`. The job uses the `production` environment, so you can add required reviewers there.
+
+Setup, once:
+
+1. In Bitwarden Secrets Manager, create a project (e.g. *openscan*) with these secrets:
+
+   | Secret | Value |
+   | --- | --- |
+   | `CLOUDFLARE_API_TOKEN` | API token with *Workers Scripts: Edit*, *D1: Edit*, *Queues: Edit* (Account) |
+   | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
+   | `APP_URL` | Public URL of the Worker, e.g. `https://openscan.<subdomain>.workers.dev` |
+   | `SESSION_SECRET`, `LWC_SECRET` | `openssl rand -hex 32` each |
+   | `GITHUB_APP_ID`, `GITHUB_APP_SLUG`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_WEBHOOK_SECRET` | From your GitHub App |
+   | `GITHUB_APP_PRIVATE_KEY` | The `.pem` contents (multi-line is fine) |
+
+2. Create a **machine account** with read access to that project and generate an **access token**. Add it to the repository as the Actions secret **`BWS_ACCESS_TOKEN`**. It is the only secret stored in GitHub.
+3. Copy each secret's **ID** from Bitwarden into the `secrets:` mapping of the *Load secrets from Bitwarden* step, replacing the placeholder IDs (`00000000-…-0000000000NN`). IDs aren't sensitive. Until they're replaced, the deploy job stops with a clear error.
+4. For the EU cloud (vault.bitwarden.eu), set the repository variable `BWS_CLOUD_REGION=eu`.
+
+The first deploy creates the D1 database `openscan` and the queue `openscan-jobs`. To reuse an existing database, add a `D1_DATABASE_ID` secret to Bitwarden and to the mapping. Finally, point the GitHub App's URLs at `APP_URL`.
+
+### By hand
+
 ```bash
 npx wrangler login
 ```

@@ -33,7 +33,7 @@
 		{
 			"binding": "DB",
 			"database_name": "openscan",
-			// Replace with the id printed by `wrangler d1 create openscan` before deploying.
+			// CI fills this in (scripts/ci/provision.mjs). By hand: paste the id from `wrangler d1 create openscan`.
 			"database_id": "00000000-0000-0000-0000-000000000000",
 			"migrations_dir": "migrations"
 		}
