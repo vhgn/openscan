@@ -4,8 +4,8 @@ import { DesignGuilloche } from './DesignGuilloche'
 import type { LandingProps } from './types'
 
 export const LANDING_DESIGNS: Record<'essay' | 'guilloche', { name: string; blurb: string; Component: ComponentType<LandingProps> }> = {
-  essay: { name: 'Essay', blurb: 'Text-centric. A short argument to engineering leaders, set as a long read with margin notes and highlighter.', Component: DesignEssay },
-  guilloche: { name: 'Guilloche', blurb: 'Artistic. Banknote security engraving: guilloche rosettes and the hundred-eyed Argus, all computed in SVG.', Component: DesignGuilloche },
+  essay: { name: 'Essay', blurb: 'Text-centric. The pitch is a short argument to engineering leaders; the report reads as a typeset weekly brief with margin notes and cream squiggle underlines.', Component: DesignEssay },
+  guilloche: { name: 'Guilloche', blurb: 'Artistic. Banknote security printing: guilloche rosettes, a dithered marble Apollo, serif display type; the report becomes a certificate of review.', Component: DesignGuilloche },
 }
 export const DEFAULT_DESIGN = 'essay' as const
 export type DesignKey = keyof typeof LANDING_DESIGNS
