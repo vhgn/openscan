@@ -25,8 +25,8 @@ Visitors are **engineering team leads and CTOs**. They don't want a 400-row scan
 
 | Option | Direction | Status |
 | --- | --- | --- |
-| A · Signal | Dark, developer-native. Leads with the actual triage output in a terminal card. | candidate |
-| B · Ledger | Light, editorial. Positions the report as a briefing you'd forward to leadership. | candidate |
+| A · Signal | Dark operator console. A live scan session (recon → hunt → validate → brief) shows candidates being disproven; verified findings come with a source trace. | candidate |
+| B · Ledger | Light, consultancy-style. A confidential CTO briefing with a risk register stamped verified / needs input / rejected, effort per fix, and a recommendation. | candidate |
 | C · Redline | Offensive-security dossier: attack path, PoC evidence, fix order for CTOs and team leads. Replaced the earlier "Aurora" option, which was rejected as too consumer-friendly. | candidate |
 
 Approval is stored in D1 (`app_settings.landing_design`). Until something is approved, `/` shows option A with a banner pointing to `/design`. Set `ADMIN_GITHUB_LOGINS` to restrict who can approve. Screenshots are in [`docs/design/`](./docs/design).
