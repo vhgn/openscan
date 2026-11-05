@@ -85,15 +85,20 @@ export function fakeModel(respond: Responder, calls: LlmCall[] = []) {
  * first import of anything that loads it (the engine, actions, routes...): import those
  * dynamically after calling this. Users with `chatgpt_cookie_enc` set are "linked".
  */
-export function mockChatGPT(respond: Responder) {
+export function mockChatGPT(respond: Responder, opts: { codex?: boolean } = {}) {
   const calls: LlmCall[] = []
   const model = fakeModel(respond, calls)
   mock.module(new URL('../../src/lib/chatgpt.ts', import.meta.url).href, {
     namedExports: {
       backgroundLLM: async (user: { chatgpt_cookie_enc: string | null }) => (user.chatgpt_cookie_enc ? { provider: () => model, model: 'gpt-stub' } : null),
-      // No Codex Cloud: scans use the direct ChatGPT engine.
-      codexCredentials: async () => null,
+      // Without `codex`, no Codex Cloud: scans use the direct ChatGPT engine. With it, linked users
+      // get credentials for the Codex Cloud API, which tests serve with FakeCodex (tests/helpers/codex.ts).
+      codexCredentials: async (user: { chatgpt_cookie_enc: string | null }) =>
+        opts.codex && user.chatgpt_cookie_enc ? { accessToken: CODEX_ACCESS_TOKEN, accountId: CODEX_ACCOUNT_ID } : null,
     },
   })
   return { calls, model }
 }
+
+export const CODEX_ACCESS_TOKEN = 'codex-access-token'
+export const CODEX_ACCOUNT_ID = 'acct_test'
