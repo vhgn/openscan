@@ -107,3 +107,13 @@ test('triageOutput / validateOutput / reviewOutput schemas', () => {
   assert.ok(A.reviewOutput.safeParse({ findings: [f], questions: [], answers: [] }).success)
   assert.ok(!A.reviewOutput.safeParse({ findings: [{ ...f, category: 'web' }], questions: [], answers: [] }).success)
 })
+
+test('owner questions: code behaviour is looked up in the code, never asked', () => {
+  // Every agent that may raise questions gets the shared rules.
+  for (const system of [A.READER_SYSTEM, A.reviewSystem(defaultPreferences, '')]) {
+    assert.match(system, /Never ask how the code behaves/)
+    assert.match(system, /TO VERIFY IN CODE/)
+  }
+  assert.match(A.PROFILE_SYSTEM, /TO VERIFY IN CODE/, 'reading notes about code to check survive into the profile')
+  assert.match(A.newQuestion.shape.question.description ?? '', /never about what the code does/)
+})

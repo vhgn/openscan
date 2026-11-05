@@ -101,3 +101,9 @@ test('parseTaskOutput takes the last message that satisfies the contract', () =>
   assert.deepEqual(parseTaskOutput('validate', ['Plan: …', '```json\n' + JSON.stringify(good) + '\n```', 'Done.'])?.verdicts[0].decision, 'confirmed')
   assert.equal(parseTaskOutput('validate', ['{"verdicts": "nope"}']), null)
 })
+
+test('recon prompt: the agent settles code-behaviour questions itself, with the whole repository', () => {
+  const r = reconPrompt({ repo: 'acme/api', userContext: '', openQuestions: [] })
+  assert.match(r.prompt, /settle every question about how the code behaves yourself/)
+  assert.match(r.prompt, /Never ask how the code behaves/)
+})

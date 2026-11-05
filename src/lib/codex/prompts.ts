@@ -57,6 +57,7 @@ ${A.PROFILE_SYSTEM}
 ${pb.text}
 Explore the whole repository yourself (entry points, auth, data stores, deployment files, CI). Put "UNENFORCED: …" items in notes.
 ${A.QUESTION_RULES}
+You have the whole repository checked out: settle every question about how the code behaves yourself (grep for callers, route and listener registration, middleware, config) and put the result in notes with file:line. Only facts outside the repository may become questions.
 Max 6 questions, ordered by impact (most impactful first). Answer any open question below that the code settles (use its id in answers).
 
 Repository: ${input.repo}

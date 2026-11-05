@@ -5,7 +5,11 @@ import type { Preferences, RepoProfile } from '../types'
 const severity = z.enum(['critical', 'high', 'medium', 'low', 'info'])
 
 export const newQuestion = z.object({
-  question: z.string().describe('A specific, high-impact question only the owner can answer; its answer must change a severity or a verdict'),
+  question: z
+    .string()
+    .describe(
+      'A specific, high-impact question only the owner can answer: about intent, deployment, users or data, never about what the code does. Its answer must change a severity or a verdict',
+    ),
   rationale: z.string().describe('Which findings or severities the answer changes, and how'),
 })
 
@@ -15,7 +19,12 @@ export const newQuestion = z.object({
  */
 export const QUESTION_RULES = `Questions for the owner (shown to them as "Questions for you"):
 - Ask only the few questions whose answers have the biggest impact on the security assessment: they would raise or lower a severity, confirm or reject a finding, or change which parts of the code are attack surface. Typical examples: internet exposure, who the users and attackers are, data sensitivity, the intended auth/role model, tenancy, deployment controls not visible in source.
-- Do NOT ask about small architecture or implementation details (which library, folder layout, naming, how a module is wired, coding conventions, build tooling) or anything you could settle by reading more code. Do not ask what the code already shows; read it instead.
+- Ask only about what is NOT in the repository: intent, the deployment and network around the code, who the users are, what the data is. The owner is not a code oracle.
+- Never ask how the code behaves: whether a function authenticates or authorizes requests, validates input, is reachable, who calls it, whether it relies on its caller being trusted, what a config or handler does. That answer is in the code. Go find it: search for the callers, route and listener registration, middleware, guards and config, and decide from that evidence. If the code you need is not in front of you yet, write a note "TO VERIFY IN CODE: <what and where to look>" instead of a question.
+  Bad: "Do \`connector.fetch\` and \`config.fetch\` authenticate every request, or rely on the listener's caller being trusted?" (read both handlers and where the listener is created).
+  Good: "Is the public listener reachable from the internet, or only from inside your private network?" (deployment, not visible in source).
+- If a question needs a function, file, variable or config-key name to make sense, it is a code question: answer it from the code, do not ask it.
+- Do NOT ask about small architecture or implementation details (which library, folder layout, naming, how a module is wired, coding conventions, build tooling).
 - Before asking, check: "If the owner answers either way, would a finding or severity change?" If not, do not ask.
 - Fewer is better; returning no questions is fine. Never rephrase an existing open question or known answer.
 - The owner SKIPPED some earlier questions (listed under "Skipped questions"). Treat each as a signal that the owner does not want that kind of question: never ask it again, never ask a reworded or narrower variant of it, and avoid questions on the same topic.`
@@ -46,6 +55,7 @@ Rules:
 - Record concise, durable facts as notes (no speculation without saying so).
 ${QUESTION_RULES}
 - When files you are reading settle an open question, answer it with evidence (file path). Prefer answering over asking.
+- An open question about code behaviour that you can settle from these files: answer it. One you can't settle yet: leave it, and add a "TO VERIFY IN CODE" note so the reviewer checks it.
 - Never invent files you were not shown.`
 
 export function readerPrompt(input: {
@@ -92,7 +102,8 @@ export const profileOutput = z.object({
 
 export const PROFILE_SYSTEM = `You are the "architect" agent of openscan. Turn reading notes into a precise repository profile
 that a security reviewer will rely on. Be concrete (name files, frameworks, data stores). If unknown, say "Unknown".
-Also answer any open question the notes already settle.`
+Also answer any open question the notes already settle.
+Keep every "TO VERIFY IN CODE: …" reading note (unless the other notes settle it) in the profile's notes, so the reviewer checks it in the code.`
 
 export function profilePrompt(input: { repo: string; overview: string; notes: string[]; openQuestions: Array<{ id: string; question: string }>; userContext: string }) {
   return `Repository: ${input.repo}
@@ -135,6 +146,7 @@ ${playbook}
 
 Report only issues with a plausible attack path in THIS application; skip style nits and generic advice.
 Calibrate severity to the repository profile and known answers (exposure, data, auth model).
+Profile notes starting "TO VERIFY IN CODE" are open points about how the code behaves: settle them from the files you are shown (answer, finding, or nothing to report), never by asking the owner.
 Focus areas requested by the user: ${prefs.focus.join(', ')}.
 Audience: ${prefs.audience}. Minimum severity of interest: ${prefs.minSeverity}.
 If something would be critical only under an unknown assumption, report it with lower confidence AND ask the question.
