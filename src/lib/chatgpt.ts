@@ -53,6 +53,10 @@ export function chatgptAuth(): ChatGPTHandler {
       rateLimit: { limit: 120, windowMs: 60_000 },
     },
     instructions: 'You are openscan, a meticulous application-security reviewer. Reply with exactly what is asked.',
+    // Codex Cloud tasks (chatgpt.com/backend-api/wham) are not behind the SDK proxy, so the
+    // Worker needs a short-lived access token for them. The refresh token stays redacted
+    // (dangerouslyAllowRefreshTokenExport is NOT set); tokens are never stored or logged.
+    dangerouslyAllowTokenExport: true,
   })
   return handler
 }
@@ -115,4 +119,16 @@ export async function backgroundLLM(user: Pick<UserRow, 'chatgpt_cookie_enc'>): 
     fetch: auth.proxyFetch(req),
   })
   return { provider, model }
+}
+
+/**
+ * Short-lived access token + account id for Codex Cloud task calls, or null when the
+ * user has no live ChatGPT session. Used server-side only.
+ */
+export async function codexCredentials(user: Pick<UserRow, 'chatgpt_cookie_enc'>): Promise<{ accessToken: string; accountId: string } | null> {
+  const req = await syntheticRequest(user)
+  if (!req) return null
+  const tokens = await chatgptAuth().dangerouslyGetTokens(req).catch(() => undefined)
+  if (!tokens?.accessToken || !tokens.accountId) return null
+  return { accessToken: tokens.accessToken, accountId: tokens.accountId }
 }

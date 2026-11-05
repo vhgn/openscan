@@ -9,6 +9,12 @@
  *   understand:  init -> read* -> profile -> done                      (onboarding "AI reads your repo")
  *   security:    init -> deps -> review* -> validate* -> triage -> done  (the security report)
  *
+ * Codex engine (user has a Codex Cloud environment for the repo): the agent work runs as
+ * Codex Cloud tasks on the user's ChatGPT plan, polled via delayed queue messages:
+ *   understand:  init -> codex_recon -> codex_recon_wait* -> done
+ *   security:    init -> deps -> codex_hunt -> codex_hunt_wait* -> codex_validate -> codex_validate_wait* -> triage
+ * Any Codex failure falls back to the direct engine (read* or review*) for that scan.
+ *
  * Methodology comes from vendored agentic security skills (src/lib/skills, SKILLS.md):
  * recon = ToB audit-context-building + Cloudflare recon; review = Cloudflare hunting +
  * Anthropic security-review (+ ToB differential-review on push, agentic-actions /
@@ -23,6 +29,7 @@ import { sha256Hex } from '../crypto'
 import { backgroundLLM, type BackgroundLLM } from '../chatgpt'
 import { fetchChangedFiles, fetchCodeScanningAlerts, fetchFile, fetchTree, getRepo, repoToken } from '../github/repos'
 import { askJson, MOCK_LLM } from '../ai/llm'
+import type { z } from 'zod'
 import * as A from '../ai/agents'
 import { selectFiles, selectLockfiles, treeOverview } from './select-files'
 import { dedupeDeps, osvFindings, parseDeps } from './deps'
@@ -30,6 +37,9 @@ import { heuristicFindings, heuristicProfile, heuristicQuestions } from './heuri
 import { brotliFindings, installScriptPackages, runtimeFindings, selectRuntimeFiles } from './runtime-advisories'
 import { huntPlaybook, reconPlaybook, reportPlaybook, validatePlaybook } from '../skills/playbooks'
 import { tracePaths } from './trace'
+import { codexClientFor, codexEnvironmentFor } from '../codex/runtime'
+import { environmentsSettingsUrl, taskUrl } from '../codex/cloud'
+import * as CP from '../codex/prompts'
 import {
   SEVERITIES,
   defaultPreferences,
@@ -72,6 +82,8 @@ interface ScanState {
   validateTotal?: number
   /** Skill ids applied so far in this scan. */
   skills?: string[]
+  /** Codex Cloud runtime state. */
+  codex?: { envId: string; envLabel: string | null; tasks: Partial<Record<CP.CodexRole, { id: string; startedAt: number; status?: string }>> }
 }
 
 // ---------------------------------------------------------------- public API
@@ -152,7 +164,7 @@ export async function runStep(scanId: string): Promise<void> {
       scan.id,
     )
     if (result.phase === 'done') await complete(ctx)
-    else await enqueue(scan.id)
+    else await enqueue(scan.id, result.delay ?? 0)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const attempts = scan.attempts + 1
@@ -177,6 +189,8 @@ interface StepCtx {
 interface StepResult {
   phase: string
   progress: number
+  /** Seconds before the next step runs (used to poll Codex Cloud tasks). */
+  delay?: number
 }
 
 async function resolveEngine(ctx: StepCtx): Promise<BackgroundLLM | null> {
@@ -184,19 +198,32 @@ async function resolveEngine(ctx: StepCtx): Promise<BackgroundLLM | null> {
   const mode = aiMode()
   const llm = mode === 'mock' ? MOCK_LLM : mode === 'auto' ? await backgroundLLM(user).catch(() => null) : null
   if (!scan.engine) {
-    const engine = llm ? 'ai' : 'heuristic'
-    await run('UPDATE scans SET engine = ?, model = ? WHERE id = ?', engine, llm?.model ?? null, scan.id)
-    await logEvent(
-      scan.id,
-      llm ? `Using ChatGPT (${llm.model}) via the user's ChatGPT plan` : 'ChatGPT not linked — running deterministic heuristic analysis',
-    )
+    let engine = llm ? 'ai' : 'heuristic'
+    if (llm) {
+      const client = await codexClientFor(user).catch(() => null)
+      const env = client ? await codexEnvironmentFor(user.id, ctx.repo, client).catch(() => null) : null
+      if (env) {
+        engine = 'codex'
+        ctx.state.codex = { envId: env.id, envLabel: env.label, tasks: {} }
+        await logEvent(scan.id, `Using Codex Cloud tasks in environment "${env.label ?? env.id}" on the user's ChatGPT plan`)
+      } else {
+        await logEvent(scan.id, `No Codex Cloud environment for ${ctx.repo.full_name} (create one at ${environmentsSettingsUrl()}); using direct ChatGPT review`)
+      }
+    }
+    await run('UPDATE scans SET engine = ?, model = ? WHERE id = ?', engine, engine === 'codex' ? 'codex-cloud' : (llm?.model ?? null), scan.id)
+    if (engine !== 'codex') {
+      await logEvent(
+        scan.id,
+        llm ? `Using ChatGPT (${llm.model}) via the user's ChatGPT plan` : 'ChatGPT not linked — running deterministic heuristic analysis',
+      )
+    }
     scan.engine = engine
-  } else if (scan.engine === 'ai' && !llm) {
+  } else if ((scan.engine === 'ai' || scan.engine === 'codex') && !llm) {
     await run(`UPDATE scans SET engine = 'heuristic' WHERE id = ?`, scan.id)
     await logEvent(scan.id, 'ChatGPT session unavailable — continuing with heuristics', 'warn')
     scan.engine = 'heuristic'
   }
-  return scan.engine === 'ai' ? llm : null
+  return scan.engine === 'ai' || scan.engine === 'codex' ? llm : null
 }
 
 async function logEvent(scanId: string, message: string, level: 'info' | 'warn' | 'error' = 'info') {
@@ -394,8 +421,11 @@ async function understandStep(ctx: StepCtx): Promise<StepResult> {
     case 'init': {
       const paths = await initTree(ctx, 30)
       if (!ctx.llm) await addQuestions(ctx, heuristicQuestions(paths))
-      return { phase: 'read', progress: 10 }
+      return { phase: scan.engine === 'codex' ? 'codex_recon' : 'read', progress: 10 }
     }
+    case 'codex_recon':
+    case 'codex_recon_wait':
+      return codexReconStep(ctx)
     case 'read': {
       const batchPaths = nextBatch(state)
       if (!batchPaths.length) return { phase: 'profile', progress: 88 }
@@ -485,8 +515,14 @@ async function securityStep(ctx: StepCtx): Promise<StepResult> {
     }
     case 'deps': {
       await signalsStep(ctx)
-      return { phase: 'review', progress: 18 }
+      return { phase: scan.engine === 'codex' ? 'codex_hunt' : 'review', progress: 18 }
     }
+    case 'codex_hunt':
+    case 'codex_hunt_wait':
+      return codexHuntStep(ctx, profile)
+    case 'codex_validate':
+    case 'codex_validate_wait':
+      return codexValidateStep(ctx, profile)
     case 'review': {
       const batchPaths = nextBatch(state)
       if (!batchPaths.length) return ctx.llm ? startValidation(ctx) : { phase: 'triage', progress: 88 }
@@ -629,6 +665,152 @@ function runtimeSkills(title: string): string[] {
   return ['cognition-devin-vuln-fixes']
 }
 
+// ----- Codex Cloud runtime
+
+const CODEX_POLL_SECONDS = 30
+const CODEX_TIMEOUT_MS = 45 * 60_000
+
+async function recordCodexTasks(ctx: StepCtx, status: Partial<Record<CP.CodexRole, string>>) {
+  for (const [role, st] of Object.entries(status)) {
+    const t = ctx.state.codex?.tasks[role as CP.CodexRole]
+    if (t && st) t.status = st
+  }
+  const tasks = Object.entries(ctx.state.codex?.tasks ?? {}).map(([role, t]) => ({ role, id: t!.id, url: taskUrl(t!.id), status: t!.status ?? 'started' }))
+  await run('UPDATE scans SET codex_tasks_json = ? WHERE id = ?', JSON.stringify(tasks), ctx.scan.id)
+}
+
+/** Switches this scan to the direct engine after a Codex problem. */
+async function codexFallback(ctx: StepCtx, reason: string): Promise<StepResult> {
+  await logEvent(ctx.scan.id, `Codex Cloud: ${reason.slice(0, 250)} — falling back to direct ChatGPT review`, 'warn')
+  ctx.scan.engine = ctx.llm ? 'ai' : 'heuristic'
+  await run('UPDATE scans SET engine = ? WHERE id = ?', ctx.scan.engine, ctx.scan.id)
+  ctx.state.cursor = 0
+  return ctx.scan.kind === 'understand' ? { phase: 'read', progress: 12 } : { phase: 'review', progress: 20 }
+}
+
+/**
+ * Starts (phase X) or polls (phase X_wait) a Codex Cloud task. Returns the parsed
+ * contract output when complete, a StepResult to continue waiting, or a fallback.
+ */
+async function runCodexTask<R extends CP.CodexRole>(
+  ctx: StepCtx,
+  role: R,
+  build: () => Promise<{ prompt: string; skills: string[] }>,
+  progress: number,
+): Promise<{ done: CP.TaskOutput<R> } | { step: StepResult }> {
+  const { scan, state } = ctx
+  const client = await codexClientFor(ctx.user).catch(() => null)
+  if (!client || !state.codex) return { step: await codexFallback(ctx, 'ChatGPT session unavailable') }
+  const waitPhase = `codex_${role}_wait`
+  try {
+    if (scan.phase !== waitPhase) {
+      const { prompt, skills } = await build()
+      useSkills(ctx, skills)
+      const branch = ctx.repo.default_branch || 'main'
+      const id = await client.createTask({ environmentId: state.codex.envId, branch, prompt, qaMode: true })
+      state.codex.tasks[role] = { id, startedAt: now() }
+      await recordCodexTasks(ctx, { [role]: 'running' } as Partial<Record<CP.CodexRole, string>>)
+      await logEvent(scan.id, `Codex Cloud ${role} task started on ${branch}: ${taskUrl(id)}`)
+      return { step: { phase: waitPhase, progress, delay: CODEX_POLL_SECONDS } }
+    }
+    const task = state.codex.tasks[role]
+    if (!task) return { step: await codexFallback(ctx, `lost ${role} task id`) }
+    const res = await client.getTask(task.id)
+    if (res.status === 'pending' || res.status === 'in_progress' || res.status === 'unknown') {
+      if (now() - task.startedAt > CODEX_TIMEOUT_MS) return { step: await codexFallback(ctx, `${role} task timed out`) }
+      return { step: { phase: waitPhase, progress: Math.min(progress + 6, progress + Math.round((now() - task.startedAt) / 60_000)), delay: CODEX_POLL_SECONDS } }
+    }
+    await recordCodexTasks(ctx, { [role]: res.status } as Partial<Record<CP.CodexRole, string>>)
+    if (res.status !== 'completed') return { step: await codexFallback(ctx, `${role} task ${res.status}${res.error ? `: ${res.error}` : ''}`) }
+    const out = CP.parseTaskOutput(role, res.messages)
+    if (!out) return { step: await codexFallback(ctx, `${role} task finished without valid JSON output`) }
+    return { done: out }
+  } catch (e) {
+    return { step: await codexFallback(ctx, String(e)) }
+  }
+}
+
+async function codexReconStep(ctx: StepCtx): Promise<StepResult> {
+  const r = await runCodexTask(ctx, 'recon', async () => CP.reconPrompt({ repo: ctx.repo.full_name, userContext: ctx.prefs.context, openQuestions: await openQuestions(ctx.user.id, ctx.repo.id) }), 15)
+  if ('step' in r) return r.step
+  const { questions, answers, ...profile } = r.done
+  await applyAnswers(ctx, answers)
+  await addQuestions(ctx, questions.slice(0, 6))
+  await run('UPDATE repositories SET profile_json = ?, understood_at = ?, updated_at = ? WHERE id = ?', JSON.stringify(profile), now(), now(), ctx.repo.id)
+  const open = (await openQuestions(ctx.user.id, ctx.repo.id)).length
+  await run('UPDATE scans SET summary_json = ? WHERE id = ?', JSON.stringify({ profile, filesReviewed: 0, openQuestions: open }), ctx.scan.id)
+  await logEvent(ctx.scan.id, `Codex built the repository profile (${profile.stack.join(', ') || 'stack unknown'}); ${open} question(s) still need you`)
+  return { phase: 'done', progress: 100 }
+}
+
+async function codexHuntStep(ctx: StepCtx, profile: RepoProfile | null): Promise<StepResult> {
+  const r = await runCodexTask(
+    ctx,
+    'hunt',
+    async () => {
+      const already = await all<{ title: string }>('SELECT title FROM findings WHERE scan_id = ?', ctx.scan.id)
+      return CP.huntPrompt({
+        repo: ctx.repo.full_name,
+        prefs: ctx.prefs,
+        profile,
+        knownAnswers: await knownAnswers(ctx.user.id, ctx.repo.id),
+        openQuestions: await openQuestions(ctx.user.id, ctx.repo.id),
+        alreadyFound: already.map((a) => a.title),
+        changed: ctx.state.changed,
+        priorityFiles: ctx.state.files ?? [],
+      })
+    },
+    22,
+  )
+  if ('step' in r) return r.step
+  const pb = huntPlaybook({ differential: Boolean(ctx.state.changed?.length) })
+  ctx.state.filesReviewed = r.done.filesExamined
+  await saveFindings(ctx, r.done.findings.map((f) => ({ ...f, source: 'ai-review' as const, skills: pb.skills })))
+  await applyAnswers(ctx, r.done.answers)
+  await addQuestions(ctx, r.done.questions.slice(0, 3))
+  await logEvent(ctx.scan.id, `Codex hunt examined ${r.done.filesExamined} file(s) → ${r.done.findings.length} finding(s)`)
+  const next = await startValidation(ctx)
+  return next.phase === 'validate' ? { phase: 'codex_validate', progress: 76 } : next
+}
+
+async function codexValidateStep(ctx: StepCtx, profile: RepoProfile | null): Promise<StepResult> {
+  const ids = ctx.state.validateQueue ?? []
+  if (!ids.length) return { phase: 'triage', progress: 88 }
+  const rows = (
+    await Promise.all(
+      ids.map((id) =>
+        first<{ id: string; severity: string; title: string; file: string | null; line: number | null; description: string; threat_model: string | null; trace_json: string | null }>(
+          'SELECT id, severity, title, file, line, description, threat_model, trace_json FROM findings WHERE id = ?',
+          id,
+        ),
+      ),
+    )
+  ).filter(Boolean) as Array<{ id: string; severity: string; title: string; file: string | null; line: number | null; description: string; threat_model: string | null; trace_json: string | null }>
+  const r = await runCodexTask(
+    ctx,
+    'validate',
+    async () =>
+      CP.validatePrompt({
+        repo: ctx.repo.full_name,
+        prefs: ctx.prefs,
+        profile,
+        knownAnswers: await knownAnswers(ctx.user.id, ctx.repo.id),
+        findings: rows.map((f, index) => ({ index, severity: f.severity, title: f.title, file: f.file, line: f.line, description: f.description, threatModel: f.threat_model, trace: parseJson<string[]>(f.trace_json, []) })),
+      }),
+    78,
+  )
+  if ('step' in r) {
+    // Fallback from validation keeps the findings and validates them directly instead.
+    return r.step.phase === 'review' ? { phase: 'validate', progress: 78 } : r.step
+  }
+  for (const v of r.done.verdicts) {
+    const f = rows[v.index]
+    if (f) await applyVerdict(ctx, f, v)
+  }
+  ctx.state.validateQueue = []
+  return { phase: 'triage', progress: 88 }
+}
+
 // ----- independent validation (ToB fp-check + brocards, Cloudflare fresh verifier)
 
 const VALIDATE_PER_STEP = 2
@@ -649,6 +831,36 @@ async function startValidation(ctx: StepCtx): Promise<StepResult> {
   useSkills(ctx, pb.skills)
   await logEvent(ctx.scan.id, `Validating ${rows.length} finding(s) with an independent verifier (fp-check gates, triage brocards)`)
   return { phase: 'validate', progress: 76 }
+}
+
+type Verdict = z.infer<typeof A.validateOutput>
+
+/** Applies an independent validator verdict to a finding (shared by direct + Codex validators). */
+async function applyVerdict(ctx: StepCtx, f: { id: string; title: string }, out: Verdict) {
+  const id = f.id
+  const pb = validatePlaybook()
+  const gates = Object.entries(out.gates).map(([k, v]) => `${k}: ${v}`).join(', ')
+  const missing = out.decision === 'needs_validation' && out.missingFact.trim() ? `\nMissing fact: ${out.missingFact.trim()}` : ''
+  const verification = `${out.restatedClaim}\nGates — ${gates}${out.brocardFailed ? `; fails brocard ${out.brocardFailed}` : ''}.\n${out.reasoning}${missing}`
+  const skills = JSON.stringify(pb.skills)
+  if (out.decision === 'rejected') {
+    await run(`UPDATE findings SET verdict = 'rejected', verification = ?, status = 'dismissed', skills_json = ? WHERE id = ?`, verification, skills, id)
+  } else if (out.decision === 'needs_validation') {
+    await run(`UPDATE findings SET verdict = 'needs_validation', verification = ?, skills_json = ? WHERE id = ?`, verification, skills, id)
+    if (out.missingFact.trim()) {
+      await addQuestions(ctx, [{ question: out.missingFact.trim(), rationale: `Decides whether "${f.title}" is a real vulnerability.` }])
+    }
+  } else {
+    await run(
+      `UPDATE findings SET verdict = 'confirmed', verification = ?, severity = ?, recommendation = COALESCE(NULLIF(?, ''), recommendation), skills_json = ? WHERE id = ?`,
+      verification,
+      out.severity,
+      out.correctedRecommendation,
+      skills,
+      id,
+    )
+  }
+  await logEvent(ctx.scan.id, `Validator: "${f.title}" → ${out.decision}${out.decision === 'confirmed' ? ` (${out.severity})` : ''}`)
 }
 
 async function validateStep(ctx: StepCtx, profile: RepoProfile | null): Promise<StepResult> {
@@ -679,28 +891,7 @@ async function validateStep(ctx: StepCtx, profile: RepoProfile | null): Promise<
           name: 'validate',
         effort: ctx.prefs.depth === 'triage' ? 'medium' : 'high',
       })
-      const gates = Object.entries(out.gates).map(([k, v]) => `${k}: ${v}`).join(', ')
-      const missing = out.decision === 'needs_validation' && out.missingFact.trim() ? `\nMissing fact: ${out.missingFact.trim()}` : ''
-      const verification = `${out.restatedClaim}\nGates — ${gates}${out.brocardFailed ? `; fails brocard ${out.brocardFailed}` : ''}.\n${out.reasoning}${missing}`
-      const skills = JSON.stringify(pb.skills)
-      if (out.decision === 'rejected') {
-        await run(`UPDATE findings SET verdict = 'rejected', verification = ?, status = 'dismissed', skills_json = ? WHERE id = ?`, verification, skills, id)
-      } else if (out.decision === 'needs_validation') {
-        await run(`UPDATE findings SET verdict = 'needs_validation', verification = ?, skills_json = ? WHERE id = ?`, verification, skills, id)
-        if (out.missingFact.trim()) {
-          await addQuestions(ctx, [{ question: out.missingFact.trim(), rationale: `Decides whether "${f.title}" is a real vulnerability.` }])
-        }
-      } else {
-        await run(
-          `UPDATE findings SET verdict = 'confirmed', verification = ?, severity = ?, recommendation = COALESCE(NULLIF(?, ''), recommendation), skills_json = ? WHERE id = ?`,
-          verification,
-          out.severity,
-          out.correctedRecommendation,
-          skills,
-          id,
-        )
-      }
-      await logEvent(ctx.scan.id, `Validator: "${f.title}" → ${out.decision}${out.decision === 'confirmed' ? ` (${out.severity})` : ''}`)
+      await applyVerdict(ctx, f, out)
     } catch (e) {
       await logEvent(ctx.scan.id, `Validator could not assess "${f.title}": ${String(e).slice(0, 150)}`, 'warn')
     }

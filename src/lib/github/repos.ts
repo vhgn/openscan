@@ -89,11 +89,14 @@ export async function syncUserRepos(user: UserRow): Promise<void> {
 
 export interface UserRepoView extends RepoRow {
   selected: number
+  codex_env_id: string | null
+  codex_env_label: string | null
+  codex_checked_at: number | null
 }
 
 export function listUserRepos(userId: string) {
   return all<UserRepoView>(
-    `SELECT r.*, ur.selected FROM user_repositories ur JOIN repositories r ON r.id = ur.repo_id
+    `SELECT r.*, ur.selected, ur.codex_env_id, ur.codex_env_label, ur.codex_checked_at FROM user_repositories ur JOIN repositories r ON r.id = ur.repo_id
      WHERE ur.user_id = ? ORDER BY r.full_name`,
     userId,
   )

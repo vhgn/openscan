@@ -10,6 +10,8 @@ import { listUserRepos, syncUserRepos } from '#/lib/github/repos'
 import { linkChatGPT, unlinkChatGPT } from '#/lib/chatgpt'
 import { createScan, loadPreferences } from '#/lib/scanner/engine'
 import { listFindings, listQuestions, listScans, scanDetail } from '#/lib/queries'
+import { codexClientFor, codexEnvironmentFor } from '#/lib/codex/runtime'
+import { environmentsSettingsUrl } from '#/lib/codex/cloud'
 import { isDemoLoginEnabled, str } from '#/lib/env'
 import { preferencesSchema, type OnboardingStep, type UserRow } from '#/lib/types'
 
@@ -116,7 +118,8 @@ export const getOnboarding = createServerFn({ method: 'GET' }).handler(async () 
     step: user.onboarding_step,
     installUrl: installUrl(),
     installations: installations.map((i) => ({ ...i, manageUrl: manageInstallationUrl(i.id, i.account_type, i.account_login) })),
-    repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, private: Boolean(r.private), language: r.language, description: r.description, selected: Boolean(r.selected), understood: Boolean(r.understood_at) })),
+    repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, private: Boolean(r.private), language: r.language, description: r.description, selected: Boolean(r.selected), understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at) })),
+    codexEnvironmentsUrl: environmentsSettingsUrl(),
     reading: scans.map((s) => ({ ...s, repo: repos.find((r) => r.id === s.repo_id)?.full_name ?? '' })),
     questions: await listQuestions(user.id, ['open', 'auto_answered', 'answered'], selected),
     preferences: await loadPreferences(user.id),
@@ -229,7 +232,8 @@ export const getDashboard = createServerFn({ method: 'GET' }).handler(async () =
   const repos = (await listUserRepos(user.id)).filter((r) => r.selected)
   return {
     user: publicUser(user),
-    repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, understood: Boolean(r.understood_at) })),
+    repos: repos.map((r) => ({ id: r.id, fullName: r.full_name, understood: Boolean(r.understood_at), codexEnv: r.codex_env_label ?? r.codex_env_id ?? null, codexChecked: Boolean(r.codex_checked_at) })),
+    codexEnvironmentsUrl: environmentsSettingsUrl(),
     scans: await listScans(user.id, 30),
     findings: await listFindings(user.id, { limit: 50 }),
     questions: await listQuestions(user.id, ['open']),
@@ -264,3 +268,14 @@ export const updateFindingStatus = createServerFn({ method: 'POST' })
     return { ok: true }
   })
 
+
+/** Re-discovers the user's Codex Cloud environments for their selected repos. */
+export const refreshCodexEnvironments = createServerFn({ method: 'POST' }).handler(async () => {
+  const user = await requireUser()
+  const client = await codexClientFor(user)
+  if (!client) return { ok: false as const, reason: 'Link ChatGPT first' }
+  const repos = (await listUserRepos(user.id)).filter((r) => r.selected)
+  let found = 0
+  for (const r of repos) if (await codexEnvironmentFor(user.id, r, client, true).catch(() => null)) found++
+  return { ok: true as const, found, total: repos.length }
+})

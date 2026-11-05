@@ -69,7 +69,8 @@ function ScanPage() {
       <main className="mx-auto max-w-5xl space-y-10 px-4 py-10">
         <header>
           <p className="muted text-sm">
-            {d.scan.kind === 'understand' ? 'Repository reading' : 'Security report'} · {d.scan.trigger} · {d.scan.engine === 'ai' ? `AI (${d.scan.model})` : d.scan.engine ?? '…'}
+            {d.scan.kind === 'understand' ? 'Repository reading' : 'Security report'} · {d.scan.trigger} ·{' '}
+            {d.scan.engine === 'codex' ? 'Codex Cloud' : d.scan.engine === 'ai' ? `AI (${d.scan.model})` : d.scan.engine ?? '…'}
             {d.scan.commit_sha && <> · <span className="font-mono">{d.scan.commit_sha.slice(0, 7)}</span></>}
           </p>
           <h1 className="mt-1 flex items-center gap-3 text-2xl font-bold tracking-tight">
@@ -84,6 +85,15 @@ function ScanPage() {
             </div>
           )}
           {d.scan.status === 'failed' && <p className="mt-3 text-sm text-red-600">Failed: {d.scan.error}</p>}
+          {d.codexTasks.length > 0 && (
+            <p className="mt-3 flex flex-wrap gap-2 text-xs">
+              {d.codexTasks.map((t) => (
+                <a key={t.id} href={t.url} target="_blank" rel="noreferrer" className="rounded-full border hairline px-2.5 py-1 hover:border-[var(--muted)]">
+                  Codex {t.role} task · {t.status} ↗
+                </a>
+              ))}
+            </p>
+          )}
         </header>
 
         {summary && (

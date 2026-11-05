@@ -103,6 +103,16 @@ export function mockResponse(name: string, prompt: string): unknown {
         research: [],
       }
     }
+    case 'codex-recon':
+      return { ...(mockResponse('profile', prompt) as object), summary: 'Mock profile from a Codex Cloud recon task.', questions: [{ question: 'Which of these services are internet-facing?', rationale: 'Exposure drives severity.' }] }
+    case 'codex-hunt': {
+      const r = mockResponse('review', '=== src/server.js ===') as { findings: unknown[] }
+      return { ...r, filesExamined: 42 }
+    }
+    case 'codex-validate': {
+      const n = (prompt.match(/"index":/g) ?? []).length
+      return { verdicts: Array.from({ length: n }, (_, index) => ({ index, ...(mockResponse('validate', '') as object) })) }
+    }
     default:
       throw new Error(`mock: unknown agent "${name}"`)
   }

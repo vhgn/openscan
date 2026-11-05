@@ -115,7 +115,7 @@ export function listQuestions(userId: string, statuses: string[] = ['open'], rep
 }
 
 export async function scanDetail(userId: string, scanId: string) {
-  const scan = await first<ScanRow & { repo: string; html_url: string | null; profile_json: string | null; skills_json: string | null }>(
+  const scan = await first<ScanRow & { repo: string; html_url: string | null; profile_json: string | null; skills_json: string | null; codex_tasks_json: string | null }>(
     `SELECT s.*, r.full_name AS repo, r.html_url, r.profile_json FROM scans s JOIN repositories r ON r.id = s.repo_id WHERE s.id = ? AND s.user_id = ?`,
     scanId,
     userId,
@@ -130,8 +130,9 @@ export async function scanDetail(userId: string, scanId: string) {
     `SELECT q.*, NULL AS repo FROM questions q WHERE q.scan_id = ? ORDER BY q.created_at`,
     scanId,
   )
-  const { state_json: _s, profile_json, skills_json, ...rest } = scan
+  const { state_json: _s, profile_json, skills_json, codex_tasks_json, ...rest } = scan
   return {
+    codexTasks: parseJson<Array<{ role: string; id: string; url: string; status: string }>>(codex_tasks_json, []),
     scan: { ...rest, summary: parseJson<(Partial<ScanSummary> & { profile?: RepoProfile; openQuestions?: number }) | null>(scan.summary_json, null) },
     skills: parseJson<string[]>(skills_json, []),
     profile: parseJson<RepoProfile | null>(profile_json, null),

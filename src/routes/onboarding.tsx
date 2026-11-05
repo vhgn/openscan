@@ -197,6 +197,13 @@ function ChatGPTStep({ data }: { data: OnboardingData }) {
         )}
         {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
       </div>
+      <p className="muted mt-4 text-sm">
+        For the deepest scans, create a{' '}
+        <a href={data.codexEnvironmentsUrl} target="_blank" rel="noreferrer" className="underline">
+          Codex Cloud environment
+        </a>{' '}
+        for each repository: openscan then runs its agents as Codex Cloud tasks with the full repo checked out. Without one, it reviews files through ChatGPT directly.
+      </p>
       <button
         className="muted mt-4 text-sm underline"
         onClick={async () => {

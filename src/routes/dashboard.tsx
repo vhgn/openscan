@@ -2,7 +2,7 @@ import { createFileRoute, Link, useRouter } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { Empty, SeverityBadge, StatusDot, TopBar, timeAgo } from '#/components/ui'
 import { QuestionCard } from '#/components/QuestionCard'
-import { getDashboard, startScan } from '#/server-fns/app'
+import { getDashboard, refreshCodexEnvironments, startScan } from '#/server-fns/app'
 
 export const Route = createFileRoute('/dashboard')({
   loader: () => getDashboard(),
@@ -73,6 +73,29 @@ function Dashboard() {
             </button>
           </div>
         </section>
+
+        {data.user.chatgpt && (
+          <section className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="muted">Codex Cloud:</span>
+            {data.repos.map((r) => (
+              <span key={r.id} className={`rounded-full border px-2.5 py-1 ${r.codexEnv ? 'border-emerald-500/50' : 'hairline muted'}`} title={r.codexEnv ? `Environment: ${r.codexEnv}` : 'No Codex environment: scans use direct ChatGPT review'}>
+                {r.codexEnv ? '●' : '○'} {r.fullName}
+              </span>
+            ))}
+            <a href={data.codexEnvironmentsUrl} target="_blank" rel="noreferrer" className="muted underline">
+              manage environments ↗
+            </a>
+            <button
+              className="muted underline"
+              onClick={async () => {
+                await refreshCodexEnvironments()
+                await router.invalidate()
+              }}
+            >
+              re-check
+            </button>
+          </section>
+        )}
 
         {data.questions.length > 0 && (
           <section>

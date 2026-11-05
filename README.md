@@ -2,7 +2,7 @@
 
 **AI security review for your GitHub repositories.** openscan reads your code like an attacker would and briefs you like a CISO: what matters, what is risky, and what to do next. It is not a raw scanner dump.
 
-Built with **TanStack Start** on **Cloudflare Workers**, **D1** (SQLite), and **Queues**. It is installed as a **GitHub App**, and inference runs on the user's own ChatGPT plan through **[login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)** (no API keys).
+Built with **TanStack Start** on **Cloudflare Workers**, **D1** (SQLite), and **Queues**. It is installed as a **GitHub App**. Everything runs on the user's own ChatGPT plan through **[login-with-chatgpt](https://github.com/opencoredev/login-with-chatgpt)** (no API keys). When the user has a **Codex Cloud environment** for a repo, the agent work runs as **Codex Cloud tasks**, with the full repository checked out in OpenAI's sandbox.
 
 ---
 
@@ -105,7 +105,7 @@ Then open:
 | --- | --- |
 | `npm run dev` | Vite + workerd on :3000 (pages, API, queue consumer, D1) |
 | `npm test` | Unit tests (Node's built-in test runner): file ranking, dependency parsing, heuristics, runtime advisories, skill registry/vendoring, PEM conversion, JSON extraction |
-| `AI_MODE=mock` in `.dev.vars` | Scripted fake LLM that exercises the whole AI path (review → validate verdicts → questions → triage) without a ChatGPT account. Local testing only. |
+| `AI_MODE=mock` in `.dev.vars` | Scripted fake LLM **and** fake Codex Cloud (tasks complete after two polls, about 1 minute), to exercise the whole agent path (recon → hunt → validate verdicts → questions → triage) without a ChatGPT account. Local testing only. |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run build` | Production build into `dist/` |
 | `npm run db:migrate:local` | Apply `migrations/*.sql` to the local D1 |
@@ -166,6 +166,16 @@ Finally, point the GitHub App's URLs at the deployed `APP_URL`. Queues and cron 
                               GitHub REST                    ChatGPT (user's plan)        OSV.dev
 ```
 
+### Engines
+
+| Engine | When | How the AI work runs |
+| --- | --- | --- |
+| `codex` | ChatGPT linked **and** the user has a [Codex Cloud environment](https://chatgpt.com/codex/settings/environments) for the repo | Three Codex Cloud tasks per scan, run in Ask mode (read-only): **recon** (profile + questions), **hunt** (review the whole repo), and a separate **validate** task, which is a fresh agent that tries to refute each finding. Tasks are polled every 30 s via delayed queue messages. Task links appear on the report. |
+| `ai` | ChatGPT linked, no Codex environment (or a Codex task failed) | The Worker sends ranked file batches to ChatGPT through the login-with-chatgpt proxy. |
+| `heuristic` | ChatGPT not linked, or `AI_MODE=heuristic` | Deterministic rules plus OSV and runtime advisories only. |
+
+The Codex client (`src/lib/codex/cloud.ts`) uses the same ChatGPT backend endpoints as `codex cloud` (`/wham/environments/by-repo/…`, `/wham/tasks`). These are mirrored from `openai/codex` and are **not a documented public API**. Any Codex error (session expired, task failed or timed out, output not matching the JSON contract) logs a warning and falls back to the `ai` engine for that scan.
+
 ### Scan engine (`src/lib/scanner/engine.ts`)
 
 A resumable state machine. **Each queue message runs exactly one step** and stores its state in D1, so every Worker invocation stays short, retries are per step, and the UI gets fine-grained progress for free.
@@ -200,7 +210,7 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 - **TanStack Start on Workers.** One deployable gives SSR pages, typed server functions for the UI, and plain API routes for REST and webhooks. The same Worker exports `queue` and `scheduled` handlers (`src/server.ts`), so there's no separate backend to run.
 - **D1 + Queues instead of a long-running job.** Workers are request-scoped, so a repo review is split into small idempotent steps. Steps are retried with backoff, and a cron revives anything stalled for more than 10 minutes.
 - **The GitHub App reads code with installation tokens; user tokens are used only to discover repos.** Background scans never depend on a user being online. User tokens are AES-GCM encrypted at rest and refreshed automatically.
-- **ChatGPT tokens never leave the SDK.** We don't use `dangerouslyGetTokens`. For background scans we store the user's *signed SDK session cookie* (encrypted) and replay it through `auth.proxyFetch()`, which calls the SDK handler in-process. The SDK's own session store is a D1 table, so sessions survive deploys.
+- **ChatGPT tokens stay server-side.** For background scans we store the user's *signed SDK session cookie* (encrypted) and replay it through `auth.proxyFetch()`, which calls the SDK handler in-process. The SDK's own session store is a D1 table, so sessions survive deploys. Codex Cloud task calls aren't behind the SDK proxy, so for those only, the Worker uses `dangerouslyGetTokens()` to get a fresh **short-lived access token + account id**. The refresh token stays redacted inside the SDK, and access tokens are never stored or logged.
 - **Model discovery, not hardcoding.** The model comes from the account's `/models` list via a preference order (`PREFERRED_MODELS`).
 - **Questions are first-class data.** They're deduplicated, capped per repo, answered by the AI with evidence or by the user, and fed into every later scan as known answers.
 - **Bounded context.** Files are ranked for security relevance (`select-files.ts`, unit-tested), truncated per file, and batched by a character budget. Depth preference controls how many files are reviewed.
@@ -209,6 +219,8 @@ A resumable state machine. **Each queue message runs exactly one step** and stor
 - **Graceful degradation everywhere:** heuristic engine without AI, jsDelivr/raw CDN fallback for public demo repos, structured-output → plain-JSON fallback for models.
 
 ### Known limitations
+
+- **Codex Cloud** uses undocumented ChatGPT backend endpoints, the same ones `codex cloud` uses, so they may change. Each user must create a Codex environment per repository at chatgpt.com/codex. The Codex path was verified end to end with `AI_MODE=mock` (scripted fake tasks), not against a real ChatGPT account.
 
 - Only some of the end-to-end flow could be verified in the build sandbox. **Verified:** demo login, repo selection, preferences, the understand scan, the security scan with real OSV results, the dashboard, the report, the REST API, cron, the production build, and `wrangler deploy --dry-run`. The ChatGPT SDK worked up to OpenAI's device-code step. **Not verified (needs real accounts):** the ChatGPT device-login approval and AI-mode scans, GitHub App install/OAuth, and webhooks.
 - Large monorepos: only the top-ranked files are reviewed (30 to 50 per scan by depth). Truncated trees are noted in scan state.
