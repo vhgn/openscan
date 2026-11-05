@@ -11,7 +11,7 @@ Visitors are **engineering team leads and CTOs**. They don't want a 400-row scan
 ## Requirements (from the product owner)
 
 1. **Installable GitHub App.** Read-only access to the repositories the user picks.
-2. **Landing page + `/design`.** `/design` showed **landing page options** for the owner to pick from; the chosen one (Essay) is `/`, with a clear call to action ("Connect GitHub").
+2. **Landing page.** `/` explains the product, with a clear call to action ("Connect GitHub").
 3. **Sign-in and onboarding:**
    1. Log in with GitHub (GitHub App user authorization).
    2. Onboarding: select repositories, or update the GitHub App's repository selection on github.com and come back.
@@ -25,12 +25,12 @@ Visitors are **engineering team leads and CTOs**. They don't want a 400-row scan
 
 ## Design: Essay (chosen)
 
-The owner reviewed six directions over three rounds on `/design` (Aurora; Signal, Ledger, Redline; Console, Essay, Guilloche) and chose **Essay**: text is the product.
+The owner reviewed six directions over three rounds (Aurora; Signal, Ledger, Redline; Console, Essay, Guilloche) and chose **Essay**: text is the product. The design exploration is finished; the app ships no design or mock-up pages, only the real landing page and the signed-in app.
 
-- **Landing (`/`):** a short argument addressed to engineering leaders, set as a long read with margin notes and a sample brief inline. CTA: "Connect GitHub".
+- **Landing (`/`):** a short argument addressed to engineering leaders, set as a long read with margin notes and a short example of what a brief says. CTA: "Connect GitHub" (or "Open your brief" when signed in).
 - **Signed-in pages:** the same system everywhere. The dashboard is *the brief* (a one-sentence headline, questions, open findings, products, earlier briefs). A scan report reads as a typeset document: headline, risk in a sentence, what matters, numbered next actions with effort in the margin, findings in fix order with the validator's note beside each, set-aside findings, questions, and a colophon of the methods used.
 - **Look:** paper `#fbfbf9` and ink `#141414`; Newsreader for reading, Instrument Serif for display, Inter for labels and controls, JetBrains Mono for code. Emphasis is a cream wavy underline, never a highlighter fill. Severity is a word in small caps.
-- `/design` now shows the chosen style and a sample brief (also linked from the landing page as "See a sample brief"). Screenshots are in [`docs/design/`](./docs/design) and [`docs/screens/`](./docs/screens).
+- Screenshots of the real app are in [`docs/screens/`](./docs/screens).
 - **Rendering:** only `/` is server-rendered; signed-in pages render in the browser.
 
 ## User flow
