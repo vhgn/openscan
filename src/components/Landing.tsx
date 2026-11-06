@@ -28,7 +28,6 @@ export function Landing({ cta }: LandingProps) {
     <div className={`relative min-h-screen bg-[#fbfbf9] text-[#141414] ${serif}`}>
       <nav className="mx-auto flex max-w-5xl items-baseline justify-between gap-4 px-6 py-6 text-[15px]">
         <span className={`${display} text-2xl`}>openscan</span>
-        <span className="hidden text-[#6f6f6a] sm:inline">A note for engineering leaders · 4 min read</span>
         <a href={cta.href} className="underline decoration-1 underline-offset-4 hover:decoration-2">
           {cta.label}
         </a>
