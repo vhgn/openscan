@@ -14,10 +14,16 @@ export const Route = createFileRoute('/api/auth/github/callback')({
         const url = new URL(request.url)
         const code = url.searchParams.get('code')
         const state = url.searchParams.get('state')
-        // Our own login always carries `state` (CSRF check). The only stateless case we accept is GitHub's
-        // "request user authorization during installation" redirect, which also carries installation_id.
-        const installRedirect = !state && url.searchParams.has('installation_id')
-        if (!code || (!installRedirect && (!state || state !== readCookie(request, 'openscan_oauth_state')))) {
+        // A code is only ever exchanged for a session when `state` matches the cookie set by our own login.
+        // Without that check, anyone could send a victim here with the attacker's own code and sign them
+        // into the attacker's account (login CSRF), e.g. so the victim's ChatGPT connection lands there.
+        // GitHub's "request user authorization during installation" redirect carries installation_id but no
+        // state; we never sign in from it and hand it to the Setup URL, which uses the existing session or
+        // starts a state-checked login.
+        if (!state && url.searchParams.has('installation_id')) {
+          return new Response(null, { status: 302, headers: { location: '/api/github/setup' } })
+        }
+        if (!code || !state || state !== readCookie(request, 'openscan_oauth_state')) {
           return new Response('Invalid OAuth state. Please try signing in again.', { status: 400 })
         }
         const token = await exchangeCode(code)
@@ -27,8 +33,7 @@ export const Route = createFileRoute('/api/auth/github/callback')({
         const fresh = (await first<UserRow>('SELECT * FROM users WHERE id = ?', user.id))!
         await syncUserRepos(fresh).catch((e) => console.error('repo sync failed', e))
         const session = await createSession(user.id)
-        // Only our own login (state-checked) may carry a post-login destination.
-        const next = installRedirect ? null : safeNextPath(readCookie(request, 'openscan_next') ?? '')
+        const next = safeNextPath(readCookie(request, 'openscan_next') ?? '')
         const headers = new Headers({ location: next ?? landingPathFor(fresh) })
         headers.append('set-cookie', sessionCookieHeader(session, request.url))
         headers.append('set-cookie', 'openscan_oauth_state=; Path=/; Max-Age=0')

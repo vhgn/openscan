@@ -362,6 +362,25 @@ describe('GET /api/auth/github/callback', () => {
     assert.match(res.headers.get('set-cookie') ?? '', /openscan_session=/)
   })
 
+  test('a stateless callback with installation_id never exchanges the code or signs in (login CSRF)', async () => {
+    let exchanged = false
+    f.on('POST', 'https://github.com/login/oauth/access_token', () => {
+      exchanged = true
+      return Response.json({ access_token: 'gho_attacker' })
+    })
+    const res = await githubCallback({ request: req('/api/auth/github/callback?code=attacker-code&installation_id=1'), params: {} })
+    assert.equal(res.status, 302)
+    assert.equal(res.headers.get('location'), '/api/github/setup')
+    assert.doesNotMatch(res.headers.get('set-cookie') ?? '', /openscan_session=/)
+    assert.equal(exchanged, false, 'the code is never exchanged')
+    assert.equal(t.db.row<{ n: number }>('SELECT COUNT(*) AS n FROM sessions')!.n, 0)
+  })
+
+  test('a callback with no state cookie is rejected', async () => {
+    const res = await callback('')
+    assert.equal(res.status, 400)
+  })
+
   test('a malformed state cookie is an invalid state (400), not a crash', async () => {
     const res = await callback('openscan_oauth_state=%E0%A4%A')
     assert.equal(res.status, 400)
